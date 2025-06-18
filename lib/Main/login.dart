@@ -1,10 +1,11 @@
 import 'dart:convert';
+import 'package:apk_tb_care/Main/Petugas/home.dart';
 import 'package:apk_tb_care/register.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:apk_tb_care/home.dart';
+
 import 'package:url_launcher/url_launcher.dart';
 
 class LoginPage extends StatefulWidget {
@@ -27,37 +28,35 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _isLoading = true);
 
     try {
-      final response = await http.post(
-        Uri.parse('http://127.0.0.1:8000/api/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'username': username, 'password': password}),
+      // final response = await http.post(
+      //   Uri.parse('http://127.0.0.1:8000/api/login'),
+      //   headers: {'Content-Type': 'application/json'},
+      //   body: jsonEncode({'username': username, 'password': password}),
+      // );
+
+      // setState(() => _isLoading = false);
+
+      // if (response.statusCode == 200) {
+      //   final data = jsonDecode(response.body);
+      //   final token = data['token'];
+      //   final user = data['user'];
+
+      //   final prefs = await SharedPreferences.getInstance();
+      //   await prefs.setString('token', token);
+
+      //   if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => StaffHomePage(name: "rizal")),
       );
-
-      setState(() => _isLoading = false);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final token = data['token'];
-        final user = data['user'];
-
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('token', token);
-
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => HomePage(name: user['name']),
-            ),
-          );
-        }
-      } else {
-        final error = jsonDecode(response.body);
-        // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error['message'] ?? 'Login Gagal!')),
-        );
-      }
+      // }
+      // } else {
+      //   final error = jsonDecode(response.body);
+      //   // ignore: use_build_context_synchronously
+      //   ScaffoldMessenger.of(context).showSnackBar(
+      //     SnackBar(content: Text(error['message'] ?? 'Login Gagal!')),
+      //   );
+      // }
     } catch (e) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(

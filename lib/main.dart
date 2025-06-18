@@ -1,4 +1,4 @@
-import 'package:apk_tb_care/login.dart';
+import 'package:apk_tb_care/Main/login.dart';
 import 'package:flutter/material.dart';
 
 void main() {
@@ -10,7 +10,16 @@ class MainApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
+      theme: ThemeData(
+        primaryColor: Colors.blue[100],
+        scaffoldBackgroundColor: Colors.white,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue[100]!,
+          primary: Colors.blue,
+          secondary: Colors.amber, // kalau butuh accent
+        ),
+      ),
       title: 'TB Care',
       debugShowCheckedModeBanner: false,
       home: LoginPage(),
