@@ -1,5 +1,8 @@
+import 'package:apk_tb_care/edit_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -9,84 +12,76 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  final TextEditingController _nameController = TextEditingController();
-  String name = 'Pengguna';
+  Map<String, dynamic> _userData = {};
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadName();
+    _loadUserData();
   }
 
-  Future<void> _loadName() async {
-    final prefs = await SharedPreferences.getInstance();
+  Future<void> _loadUserData() async {
+    // Simulate API call to GET /api/profile
+    await Future.delayed(const Duration(seconds: 1));
+
+    // Mock data based on your database structure
     setState(() {
-      name = prefs.getString('name') ?? 'Pengguna';
+      _userData = {
+        'id': 1,
+        'name': 'Budi Santoso',
+        'email': 'budi@example.com',
+        'username': 'budisantoso',
+        'address': 'Jl. Merdeka No. 10, Jakarta',
+        'gender': 'Laki-laki',
+        'date_of_birth': '1990-05-15',
+        'telephone': '081234567890',
+        'profile': 'https://example.com/profiles/budi.jpg',
+        'user_type_id': 2, // 2 for patient, 1 for staff
+        'created_at': '2023-01-10T08:30:00Z',
+      };
+      _isLoading = false;
     });
   }
 
-  Future<void> _saveName(String newName) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('name', newName);
-    setState(() {
-      name = newName;
-    });
+  String _getUserType() {
+    return _userData['user_type_id'] == 1 ? 'Petugas Kesehatan' : 'Pasien';
   }
 
-  void _editNameDialog() {
-    _nameController.text = name;
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Ubah Nama'),
-            content: TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(hintText: 'Masukkan nama baru'),
+  Widget _buildInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Batal'),
-              ),
-              TextButton(
-                onPressed: () {
-                  final newName = _nameController.text.trim();
-                  if (newName.isNotEmpty) {
-                    _saveName(newName);
-                  }
-                  Navigator.pop(context);
-                },
-                child: const Text('Simpan'),
-              ),
-            ],
           ),
+          const Text(': '),
+          Expanded(child: Text(value)),
+        ],
+      ),
     );
   }
 
-  String getInitials(String name) {
-    final words = name.trim().split(RegExp(r'\s+'));
-    if (words.length == 1) return words.first[0].toUpperCase();
-    return (words[0][0] + words[1][0]).toUpperCase();
-  }
-
-  void _logout() {
-    showDialog(
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder:
-          (_) => AlertDialog(
+          (context) => AlertDialog(
             title: const Text('Konfirmasi Keluar'),
             content: const Text('Yakin ingin keluar dari aplikasi?'),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(context, false),
                 child: const Text('Batal'),
               ),
               TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  // Tambahkan logika hapus token jika ada
-                },
+                onPressed: () => Navigator.pop(context, true),
                 child: const Text(
                   'Keluar',
                   style: TextStyle(color: Colors.red),
@@ -95,93 +90,134 @@ class _ProfilePageState extends State<ProfilePage> {
             ],
           ),
     );
+
+    if (confirmed == true) {
+      // Clear session
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+
+      // Navigate to login (replace with your actual navigation)
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
     return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
+      appBar: AppBar(
+        title: const Text('Profil Saya'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit),
+            onPressed:
+                () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ProfileEditPage(userData: _userData),
+                  ),
+                ).then((_) => _loadUserData()),
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            const SizedBox(height: 16),
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  height: 180,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        theme.colorScheme.primary,
-                        theme.colorScheme.primaryContainer,
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(24),
+            Center(
+              child: Column(
+                children: [
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: Colors.grey[200],
+                    backgroundImage:
+                        _userData['profile'] != null
+                            ? CachedNetworkImageProvider(_userData['profile'])
+                            : null,
+                    child:
+                        _userData['profile'] == null
+                            ? Text(
+                              _userData['name'][0].toUpperCase(),
+                              style: const TextStyle(fontSize: 28),
+                            )
+                            : null,
                   ),
-                ),
-                Column(
+                  const SizedBox(height: 16),
+                  Text(
+                    _userData['name'],
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    _getUserType(),
+                    style: TextStyle(color: Theme.of(context).primaryColor),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CircleAvatar(
-                      radius: 50,
-                      backgroundColor: Colors.white,
-                      child: Text(
-                        getInitials(name),
-                        style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1565C0),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 20,
+                    const Text(
+                      'Informasi Pribadi',
+                      style: TextStyle(
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Colors.white,
                       ),
                     ),
-                    TextButton(
-                      onPressed: _editNameDialog,
-                      child: const Text(
-                        'Edit Nama',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          decoration: TextDecoration.underline,
-                        ),
-                      ),
+                    const Divider(),
+                    _buildInfoRow('Username', _userData['username']),
+                    _buildInfoRow('Email', _userData['email']),
+                    _buildInfoRow('Telepon', _userData['telephone']),
+                    _buildInfoRow(
+                      'Tanggal Lahir',
+                      DateFormat(
+                        'dd MMMM yyyy',
+                      ).format(DateTime.parse(_userData['date_of_birth'])),
+                    ),
+                    _buildInfoRow('Jenis Kelamin', _userData['gender']),
+                    _buildInfoRow('Alamat', _userData['address']),
+                    _buildInfoRow(
+                      'Bergabung Pada',
+                      DateFormat(
+                        'dd MMMM yyyy',
+                      ).format(DateTime.parse(_userData['created_at'])),
                     ),
                   ],
                 ),
-              ],
+              ),
             ),
-            const SizedBox(height: 32),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Riwayat Konsultasi'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: () {},
-            ),
-            ListTile(
-              leading: const Icon(Icons.notifications_active),
-              title: const Text('Pengingat Obat'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: () {},
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Tentang Aplikasi'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: () {},
-            ),
-            const Divider(),
+            const SizedBox(height: 16),
+            if (_userData['user_type_id'] == 2) // Patient features
+              Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.medical_services),
+                    title: const Text('Riwayat Pengobatan'),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                    onTap: () {
+                      // Navigate to treatment history
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.medication),
+                    title: const Text('Pengingat Minum Obat'),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                    onTap: () {
+                      // Navigate to medication reminders
+                    },
+                  ),
+                ],
+              ),
             ListTile(
               leading: const Icon(Icons.logout, color: Colors.red),
               title: const Text('Keluar', style: TextStyle(color: Colors.red)),
