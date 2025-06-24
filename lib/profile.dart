@@ -1,7 +1,11 @@
+import 'dart:convert';
+import 'package:apk_tb_care/Main/login.dart';
+import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/edit_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -22,30 +26,64 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadUserData() async {
-    // Simulate API call to GET /api/profile
-    await Future.delayed(const Duration(seconds: 1));
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
 
-    // Mock data based on your database structure
-    setState(() {
-      _userData = {
-        'id': 1,
-        'name': 'Budi Santoso',
-        'email': 'budi@example.com',
-        'username': 'budisantoso',
-        'address': 'Jl. Merdeka No. 10, Jakarta',
-        'gender': 'Laki-laki',
-        'date_of_birth': '1990-05-15',
-        'telephone': '081234567890',
-        'profile': 'https://example.com/profiles/budi.jpg',
-        'user_type_id': 2, // 2 for patient, 1 for staff
-        'created_at': '2023-01-10T08:30:00Z',
-      };
-      _isLoading = false;
-    });
+    try {
+      final response = await http.get(
+        Uri.parse('${Connection.BASE_URL}/profile/show'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> dataJson = jsonDecode(response.body);
+        setState(() {
+          _userData = dataJson['data'] ?? {};
+          _isLoading = false;
+        });
+      } else {
+        throw Exception("Failed to load user data");
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Gagal memuat data pengguna")),
+      );
+    }
   }
 
   String _getUserType() {
-    return _userData['user_type_id'] == 1 ? 'Petugas Kesehatan' : 'Pasien';
+    switch (_userData['user_type_id']) {
+      case 1:
+        return 'Petugas Kesehatan';
+      case 2:
+        return 'Pasien';
+      default:
+        return 'Pengguna';
+    }
+  }
+
+  String _getGender() {
+    switch (_userData['gender']) {
+      case 'L':
+        return 'Laki-laki';
+      case 'P':
+        return 'Perempuan';
+      default:
+        return '-';
+    }
+  }
+
+  String _formatDate(String? dateString) {
+    if (dateString == null) return '-';
+    try {
+      final dateTime = DateTime.parse(dateString);
+      return DateFormat('dd MMMM yyyy').format(dateTime);
+    } catch (e) {
+      return '-';
+    }
   }
 
   Widget _buildInfoRow(String label, String value) {
@@ -62,7 +100,7 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
           ),
           const Text(': '),
-          Expanded(child: Text(value)),
+          Expanded(child: Text(value.isNotEmpty ? value : '-')),
         ],
       ),
     );
@@ -92,19 +130,27 @@ class _ProfilePageState extends State<ProfilePage> {
     );
 
     if (confirmed == true) {
-      // Clear session
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
-
-      // Navigate to login (replace with your actual navigation)
-      Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginPage()),
+        (route) => false,
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (_userData.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Profil Saya')),
+        body: const Center(child: Text('Tidak ada data pengguna')),
+      );
     }
 
     return Scaffold(
@@ -134,20 +180,21 @@ class _ProfilePageState extends State<ProfilePage> {
                     radius: 50,
                     backgroundColor: Colors.grey[200],
                     backgroundImage:
-                        _userData['profile'] != null
-                            ? CachedNetworkImageProvider(_userData['profile'])
+                        _userData['photo'] != null
+                            ? CachedNetworkImageProvider(_userData['photo'])
                             : null,
                     child:
-                        _userData['profile'] == null
+                        _userData['photo'] == null
                             ? Text(
-                              _userData['name'][0].toUpperCase(),
+                              _userData['name']?[0]?.toString().toUpperCase() ??
+                                  '?',
                               style: const TextStyle(fontSize: 28),
                             )
                             : null,
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    _userData['name'],
+                    _userData['name'] ?? 'Nama tidak tersedia',
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
@@ -175,22 +222,25 @@ class _ProfilePageState extends State<ProfilePage> {
                       ),
                     ),
                     const Divider(),
-                    _buildInfoRow('Username', _userData['username']),
-                    _buildInfoRow('Email', _userData['email']),
-                    _buildInfoRow('Telepon', _userData['telephone']),
+                    _buildInfoRow('Username', _userData['username'] ?? ''),
+                    _buildInfoRow('Email', _userData['email'] ?? ''),
+                    _buildInfoRow('Telepon', _userData['phone'] ?? ''),
+                    _buildInfoRow(
+                      'Tempat Lahir',
+                      _userData['place_of_birth'] ?? '',
+                    ),
                     _buildInfoRow(
                       'Tanggal Lahir',
-                      DateFormat(
-                        'dd MMMM yyyy',
-                      ).format(DateTime.parse(_userData['date_of_birth'])),
+                      _formatDate(_userData['date_of_birth']),
                     ),
-                    _buildInfoRow('Jenis Kelamin', _userData['gender']),
-                    _buildInfoRow('Alamat', _userData['address']),
+                    _buildInfoRow('Jenis Kelamin', _getGender()),
                     _buildInfoRow(
                       'Bergabung Pada',
-                      DateFormat(
-                        'dd MMMM yyyy',
-                      ).format(DateTime.parse(_userData['created_at'])),
+                      _formatDate(_userData['created_at']),
+                    ),
+                    _buildInfoRow(
+                      'Terakhir Login',
+                      _formatDate(_userData['last_login_at']),
                     ),
                   ],
                 ),

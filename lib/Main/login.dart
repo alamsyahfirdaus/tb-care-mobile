@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:developer';
+import 'package:apk_tb_care/Main/Pasien/home.dart';
 import 'package:apk_tb_care/Main/Petugas/home.dart';
+import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/register.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -28,41 +31,61 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _isLoading = true);
 
     try {
-      // final response = await http.post(
-      //   Uri.parse('http://127.0.0.1:8000/api/login'),
-      //   headers: {'Content-Type': 'application/json'},
-      //   body: jsonEncode({'username': username, 'password': password}),
-      // );
-
-      // setState(() => _isLoading = false);
-
-      // if (response.statusCode == 200) {
-      //   final data = jsonDecode(response.body);
-      //   final token = data['token'];
-      //   final user = data['user'];
-
-      //   final prefs = await SharedPreferences.getInstance();
-      //   await prefs.setString('token', token);
-
-      //   if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => StaffHomePage(name: "rizal")),
+      final response = await http.post(
+        Uri.parse('${Connection.BASE_URL}/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'password': password}),
       );
-      // }
-      // } else {
-      //   final error = jsonDecode(response.body);
-      //   // ignore: use_build_context_synchronously
-      //   ScaffoldMessenger.of(context).showSnackBar(
-      //     SnackBar(content: Text(error['message'] ?? 'Login Gagal!')),
-      //   );
-      // }
+
+      setState(() => _isLoading = false);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final token = data['token'];
+        final user = data['user'];
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('token', token);
+
+        if (mounted) {
+          if (user['user_type_id'] == 2) {
+            final patient = user['patient'];
+
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) => HomePage(
+                      name: user['name'],
+                      userId: user['id'],
+                      patientId: patient['id'],
+                    ),
+              ),
+            );
+          } else {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => StaffHomePage(name: user['name']),
+              ),
+            );
+          }
+        }
+      } else {
+        final error = jsonDecode(response.body);
+        // ignore: use_build_context_synchronously
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error['message'] ?? 'Login Gagal!')),
+        );
+        log('Login failed: ${error['message']}', name: 'LoginError');
+      }
     } catch (e) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(
         // ignore: use_build_context_synchronously
         context,
       ).showSnackBar(SnackBar(content: Text('Terjadi Kesalahan: $e')));
+      log('Login failed: ${e.toString()}', name: 'LoginErrorCatch');
     }
   }
 

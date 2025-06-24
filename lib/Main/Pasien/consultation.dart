@@ -1,5 +1,16 @@
-import 'package:apk_tb_care/data/public_chat.dart';
+import 'dart:convert';
+import 'dart:developer';
+import 'dart:io';
+import 'package:apk_tb_care/connection.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
+import 'package:http_parser/http_parser.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ConsultationPage extends StatefulWidget {
   const ConsultationPage({super.key});
@@ -10,33 +21,118 @@ class ConsultationPage extends StatefulWidget {
 
 class _ConsultationPageState extends State<ConsultationPage> {
   final TextEditingController _messageController = TextEditingController();
-  final List<PublicChatMessage> _messages = [
-    PublicChatMessage(
-      text: "Selamat pagi semua! Ada yang bisa saya bantu?",
-      senderName: "Dr. Andi",
-      senderRole: "Petugas",
-      time: "08:00",
-      isOfficer: true,
-    ),
-    PublicChatMessage(
-      text: "Saya mau tanya tentang efek samping obat",
-      senderName: "Budi",
-      senderRole: "Pasien",
-      time: "08:05",
-      isOfficer: false,
-    ),
-  ];
+  List<Map<String, dynamic>> recipients = [];
+  List<dynamic> _consultations = [];
+  bool _isLoading = true;
+  File? _attachment;
+  String? _attachmentName;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadConsultations();
+    loadRecipients();
+  }
+
+  Future<void> loadRecipients() async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.get(
+        Uri.parse('${Connection.BASE_URL}/consultations/recipients'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        Map<String, dynamic> dataJson = jsonDecode(response.body);
+        setState(() {
+          recipients =
+              (dataJson['data'] as List).map<Map<String, dynamic>>((item) {
+                return {
+                  'id': item['id'],
+                  'name': item['name'],
+                  'email': item['email'],
+                  'role': item['role'],
+                };
+              }).toList();
+        });
+      } else {
+        throw Exception(
+          'Failed to load receipents status code ${response.statusCode}',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+      log('Error creating consultation: $e');
+    }
+  }
+
+  Future<void> _loadConsultations() async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.get(
+        Uri.parse('${Connection.BASE_URL}/consultations'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      log(response.statusCode.toString());
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = jsonDecode(response.body);
+        setState(() {
+          _consultations = data['data'] ?? [];
+          _isLoading = false;
+        });
+      } else {
+        throw Exception("Failed to load consultations");
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Gagal memuat konsultasi")));
+    }
+  }
+
+  Future<void> _pickFile() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+
+    if (result != null) {
+      setState(() {
+        _attachment = File(result.files.single.path!);
+        _attachmentName = result.files.single.name;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(title: Text('Forum Konsultasi')),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Forum Konsultasi Publik'),
+        title: const Text('Forum Konsultasi'),
         backgroundColor: Colors.blue[700],
         actions: [
           IconButton(
-            icon: const Icon(Icons.people),
-            onPressed: () => _showParticipants(),
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadConsultations,
           ),
         ],
       ),
@@ -60,191 +156,185 @@ class _ConsultationPageState extends State<ConsultationPage> {
             ),
           ),
 
-          // Chat messages
+          // Consultation list
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(16),
-              reverse: false,
-              itemCount: _messages.length,
+              itemCount: _consultations.length,
               itemBuilder: (context, index) {
-                return _buildMessage(_messages[index]);
+                return _buildConsultationCard(_consultations[index]);
               },
             ),
           ),
-
-          // Message input
-          _buildInputArea(),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showNewConsultationDialog(),
+        child: const Icon(Icons.add),
       ),
     );
   }
 
-  Widget _buildMessage(PublicChatMessage message) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment:
-            message.isOfficer
-                ? CrossAxisAlignment.start
-                : CrossAxisAlignment.end,
-        children: [
-          // Sender info
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment:
-                  message.isOfficer
-                      ? MainAxisAlignment.start
-                      : MainAxisAlignment.end,
-              children: [
-                if (message.isOfficer) ...[
-                  const Icon(Icons.verified_user, size: 14, color: Colors.blue),
-                  const SizedBox(width: 4),
+  Widget _buildConsultationCard(Map<String, dynamic> consultation) {
+    final hasReplies = (consultation['replies'] as List?)?.isNotEmpty ?? false;
+    final isAnswered = consultation['is_answered'] == 1;
+    final createdAt = _formatDateTime(consultation['created_at']);
+    final isPublic = consultation['recipient_id'] == null;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: InkWell(
+        onTap: () => _showConsultationDetail(consultation),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      consultation['title'] ?? 'Tanpa judul',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                  if (!isPublic)
+                    const Icon(
+                      Icons.lock_outline,
+                      size: 16,
+                      color: Colors.orange,
+                    ),
+                  if (isAnswered)
+                    const Icon(
+                      Icons.check_circle,
+                      color: Colors.green,
+                      size: 16,
+                    ),
                 ],
-                Text(
-                  message.senderName,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color:
-                        message.isOfficer ? Colors.blue[800] : Colors.grey[800],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color:
-                        message.isOfficer ? Colors.blue[100] : Colors.grey[200],
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    message.senderRole,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color:
-                          message.isOfficer
-                              ? Colors.blue[800]
-                              : Colors.grey[800],
+              ),
+              const SizedBox(height: 8),
+              Text(consultation['message'] ?? ''),
+
+              if (consultation['attachment'] != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: GestureDetector(
+                    onTap: () => _viewAttachment(consultation['attachment']),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.attach_file, size: 16),
+                        const SizedBox(width: 4),
+                        Text(
+                          consultation['attachment'].split('/').last,
+                          style: TextStyle(
+                            color: Colors.blue[600],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 4),
 
-          // Message bubble
-          Container(
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.75,
-            ),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: message.isOfficer ? Colors.blue[50] : Colors.grey[200],
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color:
-                    message.isOfficer ? Colors.blue[100]! : Colors.grey[300]!,
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Text(
+                    'Oleh: ${consultation['sender_name'] ?? 'Anonim'}',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                  const Spacer(),
+                  Text(
+                    createdAt,
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                ],
               ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(message.text),
-                const SizedBox(height: 4),
+              if (hasReplies) ...[
+                const SizedBox(height: 8),
                 Text(
-                  message.time,
-                  style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                  '${consultation['replies'].length} balasan',
+                  style: TextStyle(color: Colors.blue[600], fontSize: 12),
                 ),
               ],
-            ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInputArea() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        border: Border(top: BorderSide(color: Colors.grey[300]!)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _messageController,
-              decoration: InputDecoration(
-                hintText: "Tulis pesan...",
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              maxLines: 3,
-              minLines: 1,
-            ),
-          ),
-          const SizedBox(width: 8),
-          CircleAvatar(
-            backgroundColor: Colors.blue,
-            child: IconButton(
-              icon: const Icon(Icons.send, color: Colors.white),
-              onPressed: () {
-                if (_messageController.text.trim().isNotEmpty) {
-                  _sendMessage(_messageController.text);
-                  _messageController.clear();
-                }
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _sendMessage(String text) {
-    setState(() {
-      _messages.add(
-        PublicChatMessage(
-          text: text,
-          senderName: "Anda", // Ganti dengan nama user sebenarnya
-          senderRole: "Pasien",
-          time:
-              "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
-          isOfficer: false,
         ),
-      );
-    });
+      ),
+    );
   }
 
-  void _showParticipants() {
+  void _showConsultationDetail(Map<String, dynamic> consultation) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (context) {
         return Container(
           padding: const EdgeInsets.all(16),
+          height: MediaQuery.of(context).size.height * 0.8,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Anggota Forum',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      consultation['title'] ?? 'Detail Konsultasi',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              _buildParticipantTile("Dr. Andi", "Petugas", true),
-              _buildParticipantTile("Budi", "Pasien", false),
-              _buildParticipantTile("Citra", "Pasien", false),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Tutup'),
+              if (consultation['recipient_name'] != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Kepada: ${consultation['recipient_name']}',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                ),
+              const Divider(),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Original message
+                      _buildCommentBubble(
+                        message: consultation['message'] ?? '',
+                        sender: consultation['sender_name'] ?? 'Anonim',
+                        time: _formatDateTime(consultation['created_at']),
+                        attachment: consultation['attachment'],
+                      ),
+
+                      // Replies
+                      ...(consultation['replies'] as List?)?.map((reply) {
+                            return _buildCommentBubble(
+                              message: reply['message'] ?? '',
+                              sender: reply['sender_name'] ?? 'Pengguna',
+                              time: _formatDateTime(reply['created_at']),
+                              attachment: reply['attachment'],
+                            );
+                          }) ??
+                          [],
+
+                      const SizedBox(height: 16),
+                    ],
+                  ),
+                ),
               ),
+              _buildReplyInput(consultation['id']),
             ],
           ),
         );
@@ -252,24 +342,552 @@ class _ConsultationPageState extends State<ConsultationPage> {
     );
   }
 
-  Widget _buildParticipantTile(String name, String role, bool isOfficer) {
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: isOfficer ? Colors.blue[100] : Colors.grey[200],
-        child: Icon(
-          isOfficer ? Icons.verified_user : Icons.person,
-          color: isOfficer ? Colors.blue : Colors.grey,
-        ),
-      ),
-      title: Text(name),
-      subtitle: Text(role),
-      trailing: Text(
-        isOfficer ? "Online" : "Aktif 5m lalu",
-        style: TextStyle(
-          color: isOfficer ? Colors.green : Colors.grey,
-          fontSize: 12,
-        ),
+  Widget _buildCommentBubble({
+    required String message,
+    required String sender,
+    required String time,
+    String? attachment,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const CircleAvatar(
+            radius: 16,
+            backgroundColor: Colors.grey,
+            child: Icon(Icons.person, size: 16, color: Colors.white),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  sender,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(message),
+                      if (attachment != null) ...[
+                        const SizedBox(height: 8),
+                        GestureDetector(
+                          onTap: () => _viewAttachment(attachment),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.attach_file, size: 16),
+                              const SizedBox(width: 4),
+                              Text(
+                                attachment.split('/').last,
+                                style: TextStyle(
+                                  color: Colors.blue[600],
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 4),
+                      Text(
+                        time,
+                        style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildReplyInput(int consultationId) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        border: Border(top: BorderSide(color: Colors.grey[300]!)),
+      ),
+      child: Column(
+        children: [
+          if (_attachment != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.attach_file, size: 16),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      _attachmentName ?? 'Lampiran',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.blue[600], fontSize: 12),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: () {
+                      setState(() {
+                        _attachment = null;
+                        _attachmentName = null;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.attach_file),
+                onPressed: _pickFile,
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _messageController,
+                  decoration: InputDecoration(
+                    hintText: "Tulis balasan...",
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  maxLines: 3,
+                  minLines: 1,
+                ),
+              ),
+              const SizedBox(width: 8),
+              CircleAvatar(
+                backgroundColor: Colors.blue,
+                child: IconButton(
+                  icon: const Icon(Icons.send, color: Colors.white),
+                  onPressed: () {
+                    if (_messageController.text.trim().isNotEmpty ||
+                        _attachment != null) {
+                      _sendReply(consultationId, _messageController.text);
+                      _messageController.clear();
+                      setState(() {
+                        _attachment = null;
+                        _attachmentName = null;
+                      });
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNewConsultationDialog() {
+    final titleController = TextEditingController();
+    final messageController = TextEditingController();
+    File? newAttachment;
+    String? newAttachmentName;
+    bool isPublic = true;
+    String? selectedRecipientId;
+    String? selectedRecipientName;
+
+    Future<void> pickFile() async {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+      );
+
+      if (result != null) {
+        newAttachment = File(result.files.single.path!);
+        newAttachmentName = result.files.single.name;
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Buat Konsultasi Baru'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    /// Judul
+                    TextField(
+                      controller: titleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Judul',
+                        hintText: 'Masukkan judul konsultasi',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    /// Pesan
+                    TextField(
+                      controller: messageController,
+                      decoration: const InputDecoration(
+                        labelText: 'Pesan',
+                        hintText: 'Tulis pertanyaan atau keluhan Anda',
+                        border: OutlineInputBorder(),
+                      ),
+                      maxLines: 4,
+                    ),
+                    const SizedBox(height: 16),
+
+                    /// Opsi Publik/Privat
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: isPublic,
+                          onChanged: (value) {
+                            setState(() {
+                              isPublic = value ?? true;
+                              if (isPublic) {
+                                selectedRecipientId = null;
+                                selectedRecipientName = null;
+                              }
+                            });
+                          },
+                        ),
+                        const Text('Publik'),
+                      ],
+                    ),
+
+                    /// Dropdown Petugas Kesehatan
+                    if (!isPublic) ...[
+                      const SizedBox(height: 8),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Petugas Kesehatan',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      DropdownButtonFormField<String>(
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                        ),
+                        value: selectedRecipientId,
+                        items:
+                            recipients.map((recipient) {
+                              return DropdownMenuItem<String>(
+                                value: recipient['id'].toString(),
+                                child: Text(recipient['name']),
+                              );
+                            }).toList(),
+                        onChanged: (value) {
+                          setState(() {
+                            selectedRecipientId = value;
+                            selectedRecipientName =
+                                recipients.firstWhere(
+                                  (r) => r['id'].toString() == value,
+                                )['name'];
+                          });
+                        },
+                        hint: const Text('Pilih Petugas'),
+                        validator: (value) {
+                          if (!isPublic && (value == null || value.isEmpty)) {
+                            return 'Harap pilih petugas';
+                          }
+                          return null;
+                        },
+                      ),
+                    ],
+
+                    const SizedBox(height: 16),
+                    const Divider(),
+
+                    /// Lampiran
+                    if (newAttachment != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.attach_file, size: 16),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                newAttachmentName ?? 'Lampiran',
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 16),
+                              onPressed: () {
+                                setState(() {
+                                  newAttachment = null;
+                                  newAttachmentName = null;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.attach_file),
+                        label: const Text('Lampirkan File'),
+                        onPressed: pickFile,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Batal'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (titleController.text.isNotEmpty &&
+                        (messageController.text.isNotEmpty ||
+                            newAttachment != null)) {
+                      await _createNewConsultation(
+                        titleController.text,
+                        messageController.text,
+                        isPublic ? null : selectedRecipientId,
+                        newAttachment,
+                      );
+                      Navigator.pop(context);
+                    }
+                  },
+                  child: const Text('Kirim'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _sendReply(int consultationId, String message) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${Connection.BASE_URL}/consultations/reply'),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.fields['consultation_id'] = consultationId.toString();
+      request.fields['message'] = message;
+
+      if (_attachment != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'attachment',
+            _attachment!.path,
+            contentType: MediaType('application', 'octet-stream'),
+          ),
+        );
+      }
+
+      final response = await request.send();
+
+      if (response.statusCode == 201) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Balasan terkirim')));
+        _loadConsultations();
+      } else {
+        throw Exception('Failed to send reply ${response.statusCode}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gagal mengirim balasan: $e')));
+      log(e.toString());
+    }
+  }
+
+  Future<void> _createNewConsultation(
+    String title,
+    String message,
+    String? recipientId,
+    File? attachment,
+  ) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${Connection.BASE_URL}/consultations/store'),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.fields['title'] = title;
+      request.fields['message'] = message;
+      if (recipientId != null) {
+        request.fields['recipient_id'] = recipientId;
+      }
+
+      if (attachment != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'attachment',
+            attachment.path,
+            contentType: MediaType('application', 'octet-stream'),
+          ),
+        );
+      }
+
+      final response = await request.send();
+
+      if (response.statusCode == 201) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Konsultasi baru dibuat')));
+        _loadConsultations();
+      } else {
+        throw Exception('Failed to create consultation');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gagal membuat konsultasi: $e')));
+    }
+  }
+
+  void _viewAttachment(String url) async {
+    // Check if the URL is valid
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('File tidak tersedia')));
+      return;
+    }
+
+    final fileName = url.split('/').last;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(fileName),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Show different icons based on file type
+              _getFileIcon(fileName),
+              const SizedBox(height: 16),
+              Text('Lampiran: $fileName', textAlign: TextAlign.center),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Tutup'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context); // Close dialog first
+                await _downloadFile(url);
+              },
+              child: const Text('Unduh'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _getFileIcon(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+    final iconSize = 48.0;
+
+    if (['pdf'].contains(ext)) {
+      return const Icon(Icons.picture_as_pdf, size: 48, color: Colors.red);
+    } else if (['jpg', 'jpeg', 'png', 'gif'].contains(ext)) {
+      return const Icon(Icons.image, size: 48, color: Colors.blue);
+    } else if (['doc', 'docx'].contains(ext)) {
+      return const Icon(Icons.description, size: 48, color: Colors.blue);
+    } else if (['xls', 'xlsx'].contains(ext)) {
+      return const Icon(Icons.table_chart, size: 48, color: Colors.green);
+    } else {
+      return const Icon(Icons.insert_drive_file, size: 48);
+    }
+  }
+
+  Future<void> _downloadFile(String url) async {
+    try {
+      // Check Android version
+      if (Platform.isAndroid) {
+        if (await Permission.storage.isDenied) {
+          await Permission.storage.request();
+        }
+
+        if (await Permission.manageExternalStorage.isDenied) {
+          await Permission.manageExternalStorage.request();
+        }
+
+        if (!await Permission.manageExternalStorage.isGranted) {
+          throw Exception('Storage permission required');
+        }
+      }
+
+      final dir =
+          Platform.isAndroid
+              ? await getExternalStorageDirectory()
+              : await getApplicationDocumentsDirectory();
+
+      final fileName = url.split('/').last;
+      final savePath = '${dir!.path}/$fileName';
+
+      await Dio().download(url, savePath);
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('File downloaded to $savePath')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download failed: ${e.toString()}')),
+      );
+    }
+  }
+
+  String _formatDateTime(String? dateTime) {
+    if (dateTime == null) return '';
+    try {
+      final format = DateFormat('yyyy-MM-dd HH:mm');
+      final dt = format.parse(dateTime);
+      return DateFormat('dd MMM yyyy, HH:mm').format(dt);
+    } catch (e) {
+      return dateTime;
+    }
   }
 }

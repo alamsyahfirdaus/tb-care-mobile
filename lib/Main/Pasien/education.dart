@@ -1,7 +1,13 @@
-import 'package:apk_tb_care/data/educational_material.dart';
+import 'dart:convert';
+import 'dart:developer';
+
+import 'package:apk_tb_care/Main/Pasien/materi_detail.dart';
+import 'package:apk_tb_care/connection.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class EducationPage extends StatefulWidget {
@@ -14,79 +20,46 @@ class EducationPage extends StatefulWidget {
 class _EducationPageState extends State<EducationPage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  List<EducationalMaterial> _materials = [];
+  List<Map<String, dynamic>> _materials = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
     _fetchMaterials();
   }
 
   Future<void> _fetchMaterials() async {
-    // Simulate API call to GET /api/education
-    await Future.delayed(Duration(seconds: 1));
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
 
-    // Mock data matching your database structure
-    setState(() {
-      _materials = [
-        EducationalMaterial(
-          id: 1,
-          title: "Panduan Lengkap TB",
-          description:
-              "Materi komprehensif tentang pencegahan dan pengobatan TB",
-          thumbnail: "assets/tb_guide.jpg",
-          materialFile: "tb_guide.pdf",
-          materialUrl: "",
-          materialType: "file",
-          isPublish: 1,
-          userId: 1,
-          createdAt: DateTime(2023, 5, 10),
-          updatedAt: DateTime(2023, 5, 15),
-        ),
-        EducationalMaterial(
-          id: 2,
-          title: "Video Edukasi TB",
-          description: "Video animasi tentang penularan TB",
-          thumbnail: "assets/tb_video_thumb.jpg",
-          materialFile: "",
-          materialUrl: "https://youtube.com/watch?v=tb_education",
-          materialType: "url",
-          isPublish: 1,
-          userId: 2,
-          createdAt: DateTime(2023, 6, 1),
-          updatedAt: DateTime(2023, 6, 1),
-        ),
-        EducationalMaterial(
-          id: 3,
-          title: "Website Resmi TB Indonesia",
-          description: "Sumber informasi terpercaya tentang TB",
-          thumbnail: "assets/tb_website.jpg",
-          materialFile: "",
-          materialUrl: "https://tbindonesia.org",
-          materialType: "url",
-          isPublish: 1,
-          userId: 1,
-          createdAt: DateTime(2023, 4, 15),
-          updatedAt: DateTime(2023, 4, 20),
-        ),
-        EducationalMaterial(
-          id: 4,
-          title: "Buku Saku TB",
-          description: "Panduan praktis untuk pasien TB",
-          thumbnail: "assets/tb_handbook.jpg",
-          materialFile: "tb_handbook.pdf",
-          materialUrl: "",
-          materialType: "file",
-          isPublish: 1,
-          userId: 3,
-          createdAt: DateTime(2023, 3, 5),
-          updatedAt: DateTime(2023, 3, 10),
-        ),
-      ];
-      _isLoading = false;
-    });
+    try {
+      final response = await http.get(
+        Uri.parse('${Connection.BASE_URL}/education'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> dataJson = jsonDecode(response.body);
+        log("Data fetched: ${dataJson['data']}");
+
+        final List<dynamic> data = dataJson['data'];
+        setState(() {
+          _materials = data.cast<Map<String, dynamic>>();
+          _isLoading = false;
+        });
+      } else {
+        throw Exception("Failed to load materials");
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Gagal memuat materi: $e")));
+    }
   }
 
   @override
@@ -97,9 +70,8 @@ class _EducationPageState extends State<EducationPage>
         bottom: TabBar(
           controller: _tabController,
           tabs: [
-            Tab(icon: Icon(Icons.article), text: "Artikel"),
+            Tab(icon: Icon(Icons.article), text: "Image"),
             Tab(icon: Icon(Icons.video_library), text: "Video"),
-            Tab(icon: Icon(Icons.public), text: "Website"),
           ],
         ),
       ),
@@ -110,20 +82,13 @@ class _EducationPageState extends State<EducationPage>
                 controller: _tabController,
                 children: [
                   _buildMaterialList(
-                    _materials.where((m) => m.materialType == "file").toList(),
-                  ),
-                  _buildMaterialList(
                     _materials
-                        .where((m) => m.materialUrl.contains("youtube"))
+                        .where((m) => m['material_type'] == "image")
                         .toList(),
                   ),
                   _buildMaterialList(
                     _materials
-                        .where(
-                          (m) =>
-                              m.materialType == "url" &&
-                              !m.materialUrl.contains("youtube"),
-                        )
+                        .where((m) => m['material_type'] == "video")
                         .toList(),
                   ),
                 ],
@@ -131,7 +96,7 @@ class _EducationPageState extends State<EducationPage>
     );
   }
 
-  Widget _buildMaterialList(List<EducationalMaterial> materials) {
+  Widget _buildMaterialList(List<dynamic> materials) {
     if (materials.isEmpty) {
       return Center(
         child: Text(
@@ -146,6 +111,14 @@ class _EducationPageState extends State<EducationPage>
       itemCount: materials.length,
       itemBuilder: (context, index) {
         final material = materials[index];
+        final materialType = material['material_type'] ?? 'unknown';
+        final thumbnailUrl =
+            materialType == 'image'
+                ? material['image_url']
+                : materialType == 'video'
+                ? _getYoutubeThumbnail(material['video_url'])
+                : null;
+
         return Card(
           margin: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
           elevation: 2,
@@ -162,17 +135,20 @@ class _EducationPageState extends State<EducationPage>
                     height: 150,
                     color: Colors.grey[200],
                     child:
-                        material.thumbnail.isNotEmpty
+                        thumbnailUrl != null
                             ? CachedNetworkImage(
-                              imageUrl: material.thumbnail,
+                              imageUrl: thumbnailUrl,
                               fit: BoxFit.cover,
                               placeholder:
                                   (context, url) => Center(
                                     child: CircularProgressIndicator(),
                                   ),
                               errorWidget:
-                                  (context, url, error) =>
-                                      Icon(Icons.broken_image),
+                                  (context, url, error) => Icon(
+                                    Icons.broken_image,
+                                    size: 50,
+                                    color: Colors.grey,
+                                  ),
                             )
                             : Icon(Icons.image, size: 50, color: Colors.grey),
                   ),
@@ -183,16 +159,17 @@ class _EducationPageState extends State<EducationPage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        material.title,
+                        material['title_material'] ?? 'Judul tidak tersedia',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                       SizedBox(height: 8),
-                      if (material.description.isNotEmpty)
+                      if (material['description'] != null &&
+                          material['description'].isNotEmpty)
                         Text(
-                          material.description,
+                          material['description'],
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(color: Colors.grey[600]),
@@ -201,22 +178,22 @@ class _EducationPageState extends State<EducationPage>
                       Row(
                         children: [
                           Icon(
-                            material.materialType == "file"
-                                ? Icons.picture_as_pdf
-                                : Icons.public,
+                            _getMaterialTypeIcon(materialType),
                             size: 16,
                             color: Colors.blue,
                           ),
                           SizedBox(width: 4),
                           Text(
-                            material.materialType == "file" ? "PDF" : "Website",
+                            _getMaterialTypeText(materialType),
                             style: TextStyle(fontSize: 12),
                           ),
                           Spacer(),
                           Text(
-                            DateFormat(
-                              'dd MMM yyyy',
-                            ).format(material.createdAt),
+                            material['created_at'] != null
+                                ? DateFormat(
+                                  'dd MMM yyyy',
+                                ).format(DateTime.parse(material['created_at']))
+                                : 'Tanggal tidak tersedia',
                             style: TextStyle(fontSize: 10, color: Colors.grey),
                           ),
                         ],
@@ -232,10 +209,43 @@ class _EducationPageState extends State<EducationPage>
     );
   }
 
-  void _handleMaterialTap(EducationalMaterial material) async {
-    if (material.materialType == "url") {
-      if (await canLaunch(material.materialUrl)) {
-        await launch(material.materialUrl);
+  // Helper functions
+  String? _getYoutubeThumbnail(String? videoUrl) {
+    if (videoUrl == null) return null;
+    try {
+      final videoId = videoUrl.split('v=')[1].split('&')[0];
+      return 'https://img.youtube.com/vi/$videoId/0.jpg';
+    } catch (e) {
+      return null;
+    }
+  }
+
+  IconData _getMaterialTypeIcon(String type) {
+    switch (type) {
+      case 'video':
+        return Icons.video_library;
+      case 'image':
+        return Icons.image;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
+
+  String _getMaterialTypeText(String type) {
+    switch (type) {
+      case 'video':
+        return 'Video';
+      case 'image':
+        return 'Gambar';
+      default:
+        return 'File';
+    }
+  }
+
+  void _handleMaterialTap(Map<String, dynamic> material) async {
+    if (material['material_type'] == "url") {
+      if (await canLaunch(material['material_url'])) {
+        await launch(material['material_url']);
       } else {
         ScaffoldMessenger.of(
           context,
@@ -246,80 +256,9 @@ class _EducationPageState extends State<EducationPage>
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => MaterialDetailPage(material: material),
+          builder: (context) => MateriDetailPage(materialId: material['id']),
         ),
       );
     }
-  }
-}
-
-class MaterialDetailPage extends StatelessWidget {
-  final EducationalMaterial material;
-
-  const MaterialDetailPage({Key? key, required this.material})
-    : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(material.title),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.share),
-            onPressed: () => _shareMaterial(context),
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (material.thumbnail.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: CachedNetworkImage(
-                  imageUrl: material.thumbnail,
-                  height: 200,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                ),
-              ),
-            SizedBox(height: 16),
-            Text(
-              material.title,
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 8),
-            Text(
-              "Diunggah pada: ${DateFormat('dd MMMM yyyy').format(material.createdAt)}",
-              style: TextStyle(color: Colors.grey),
-            ),
-            SizedBox(height: 16),
-            if (material.description.isNotEmpty)
-              Text(material.description, style: TextStyle(fontSize: 16)),
-            SizedBox(height: 24),
-            if (material.materialType == "file")
-              ElevatedButton.icon(
-                onPressed: () => _downloadFile(material.materialFile),
-                icon: Icon(Icons.download),
-                label: Text("Download PDF"),
-                style: ElevatedButton.styleFrom(
-                  minimumSize: Size(double.infinity, 48),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _shareMaterial(BuildContext context) {
-    // Implement share functionality
-  }
-
-  void _downloadFile(String fileUrl) {
-    // Implement file download
   }
 }

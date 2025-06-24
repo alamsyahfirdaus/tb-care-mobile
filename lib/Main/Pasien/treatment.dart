@@ -2,16 +2,21 @@ import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
 
+import 'package:apk_tb_care/Main/Pasien/history.dart';
 import 'package:apk_tb_care/Section/screening.dart';
+import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/data/medication_record.dart';
 import 'package:apk_tb_care/data/patient_treatment.dart';
+import 'package:apk_tb_care/values/colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:http/http.dart' as http;
 
 class TreatmentPage extends StatefulWidget {
   final int patientId;
@@ -23,9 +28,9 @@ class TreatmentPage extends StatefulWidget {
 }
 
 class _TreatmentPageState extends State<TreatmentPage> {
-  late Future<PatientTreatment> _treatmentFuture;
+  late Future<Map<String, dynamic>> _treatmentFuture;
+  late Map<String, dynamic> _patientData;
   bool _notifIsActive = false;
-  final ApiService _apiService = ApiService();
 
   void _getSharedPreferences() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -95,9 +100,55 @@ class _TreatmentPageState extends State<TreatmentPage> {
   @override
   void initState() {
     super.initState();
-    _treatmentFuture = _apiService.getPatientTreatment(widget.patientId);
+    _treatmentFuture = _fetchPatientData();
     _getSharedPreferences();
     tz.initializeTimeZones();
+  }
+
+  Future<Map<String, dynamic>> _fetchPatientData() async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.get(
+        Uri.parse(
+          '${Connection.BASE_URL}/patients/${widget.patientId}/treatments',
+        ),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> dataJson = jsonDecode(response.body);
+        log(dataJson['data'][0].toString());
+        final Map<String, dynamic> data =
+            dataJson.isNotEmpty ? dataJson['data'][0] : {};
+
+        final patientDetailResponse = await http.get(
+          Uri.parse('${Connection.BASE_URL}/patients/${widget.patientId}/show'),
+          headers: {'Authorization': 'Bearer $token'},
+        );
+
+        if (patientDetailResponse.statusCode == 200) {
+          final Map<String, dynamic> dataJson3 = jsonDecode(
+            patientDetailResponse.body,
+          );
+          setState(() {
+            _patientData = dataJson3['data'];
+          });
+          // log(dataJson3['data'].toString());
+        }
+
+        return data;
+      } else {
+        throw Exception('Failed to load home data');
+      }
+    } catch (e) {
+      print('Error fetching home data: $e');
+      return {};
+    }
   }
 
   @override
@@ -108,11 +159,19 @@ class _TreatmentPageState extends State<TreatmentPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.history),
-            onPressed: () => _showMedicationHistory(),
+            onPressed:
+                () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder:
+                        (builder) =>
+                            MedicationHistoryPage(patientId: widget.patientId),
+                  ),
+                ),
           ),
         ],
       ),
-      body: FutureBuilder<PatientTreatment>(
+      body: FutureBuilder<Map<String, dynamic>>(
         future: _treatmentFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -124,6 +183,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
           }
 
           final treatment = snapshot.data!;
+          log(treatment.toString());
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -141,7 +201,10 @@ class _TreatmentPageState extends State<TreatmentPage> {
                 _buildMedicationReminder(treatment),
                 const SizedBox(height: 24),
 
-                // Drug List
+                // Drug
+                if (treatment['prescription'] != null &&
+                    treatment['prescription'].isNotEmpty)
+                  _buildDrugList(treatment['prescription']),
                 const SizedBox(height: 24),
 
                 // Screening Section
@@ -187,7 +250,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  Widget _buildDrugCard(Drug drug) {
+  Widget _buildDrugCard(String drug) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 1,
@@ -209,19 +272,14 @@ class _TreatmentPageState extends State<TreatmentPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    drug.name,
+                    drug,
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
                   ),
-                  Text("Dosis: ${drug.dose} • Waktu: ${drug.time}"),
                 ],
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.info_outline),
-              onPressed: () => _showDrugInfo(drug),
             ),
           ],
         ),
@@ -229,44 +287,16 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  void _showDrugInfo(Drug drug) {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Text(drug.name),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Dosis: ${drug.dose}"),
-                Text("Waktu: ${drug.time}"),
-                const SizedBox(height: 16),
-                const Text(
-                  "Efek Samping:",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const Text("- Mual ringan\n- Pusing\n- Perubahan warna urine"),
-                const SizedBox(height: 16),
-                const Text(
-                  "Kontraindikasi:",
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const Text("- Riwayat alergi\n- Gangguan hati"),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text("Tutup"),
-              ),
-            ],
-          ),
+  Widget _buildStatusCard(Map<String, dynamic> treatmentData) {
+    log(treatmentData.toString());
+    // Hitung progress jika data tersedia
+    final currentDay = _calculateCurrentDay(
+      treatmentData['start_date'],
+      treatmentData['end_date'],
     );
-  }
-
-  Widget _buildStatusCard(PatientTreatment treatment) {
-    final progress = _calculateProgress(treatment.startDate, treatment.endDate);
+    final totalDays = treatmentData['treatment_days'] ?? 1;
+    final progress = currentDay / totalDays;
+    log('Progress: $progress');
 
     return Card(
       elevation: 2,
@@ -274,19 +304,22 @@ class _TreatmentPageState extends State<TreatmentPage> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.medical_services, color: Colors.blue),
-                const SizedBox(width: 12),
+                Icon(Icons.medical_services, color: AppColors.primary),
+                const SizedBox(width: 8),
                 Text(
-                  treatment.treatmentType,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  'Status Pengobatan',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              treatmentData['treatment_type'] ?? 'Tidak ada jenis pengobatan',
+              style: TextStyle(fontSize: 16, color: Colors.grey[700]),
             ),
             const SizedBox(height: 16),
             LinearProgressIndicator(
@@ -300,9 +333,18 @@ class _TreatmentPageState extends State<TreatmentPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  "Progress: ${(progress * 100).toStringAsFixed(0)}%",
-                  style: const TextStyle(fontSize: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hari ke-$currentDay dari $totalDays',
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                    ),
+                    Text(
+                      '${treatmentData['start_date'] ?? 'Tanggal mulai'} - ${treatmentData['end_date'] ?? 'Tanggal selesai'}',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    ),
+                  ],
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -310,22 +352,25 @@ class _TreatmentPageState extends State<TreatmentPage> {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color:
-                        treatment.status == 1
-                            ? Colors.green[50]
-                            : Colors.blue[50],
+                    color: _getStatusColor(
+                      treatmentData['treatment_status'],
+                      true,
+                    ),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: treatment.status == 1 ? Colors.green : Colors.blue,
+                      color: _getStatusColor(
+                        treatmentData['treatment_status'],
+                        false,
+                      ),
                     ),
                   ),
                   child: Text(
-                    treatment.status == 1 ? "Aktif" : "Selesai",
+                    treatmentData['treatment_status'] ??
+                        'Status tidak tersedia',
                     style: TextStyle(
-                      color:
-                          treatment.status == 1
-                              ? Colors.green[800]
-                              : Colors.blue[800],
+                      color: _getStatusTextColor(
+                        treatmentData['treatment_status'],
+                      ),
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -338,8 +383,54 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  Widget _buildRegimenDetails(PatientTreatment treatment) {
-    final duration = _calculateDuration(treatment.startDate, treatment.endDate);
+  // Helper functions
+  int _calculateCurrentDay(String? startDate, String? endDate) {
+    if (startDate == null || endDate == null) return 0;
+
+    try {
+      final start = DateTime.parse(startDate);
+      final end = DateTime.parse(endDate);
+      final today = DateTime.now();
+
+      if (today.isBefore(start)) return 0;
+      if (today.isAfter(end)) return end.difference(start).inDays;
+
+      return today.difference(start).inDays;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  Color _getStatusColor(String? status, bool isBackground) {
+    switch (status) {
+      case 'Berjalan':
+        return isBackground ? Colors.green[50]! : Colors.green;
+      case 'Selesai':
+        return isBackground ? Colors.blue[50]! : Colors.blue;
+      default:
+        return isBackground ? Colors.grey[200]! : Colors.grey;
+    }
+  }
+
+  Color _getStatusTextColor(String? status) {
+    switch (status) {
+      case 'Berjalan':
+        return Colors.green[800]!;
+      case 'Selesai':
+        return Colors.blue[800]!;
+      default:
+        return Colors.grey[800]!;
+    }
+  }
+
+  Widget _buildRegimenDetails(Map<String, dynamic> treatment) {
+    final duration = _calculateDuration(
+      DateTime.parse(treatment['start_date']),
+      DateTime.parse(treatment['end_date']),
+    );
+    final parsedTime = DateFormat(
+      'HH:mm:ss',
+    ).parse(treatment['medication_time']);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -349,10 +440,21 @@ class _TreatmentPageState extends State<TreatmentPage> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
-        _buildDetailRow("Tanggal Mulai", _formatDate(treatment.startDate)),
-        _buildDetailRow("Tanggal Selesai", _formatDate(treatment.endDate)),
+        _buildDetailRow(
+          "Tanggal Mulai",
+          _formatDate(DateTime.parse(treatment['start_date'])),
+        ),
+        _buildDetailRow(
+          "Tanggal Selesai",
+          _formatDate(DateTime.parse(treatment['end_date'])),
+        ),
         _buildDetailRow("Durasi", duration),
-        _buildDetailRow("Waktu Minum", _formatTime(treatment.medicationTime)),
+        _buildDetailRow(
+          "Waktu Minum",
+          _formatTime(
+            TimeOfDay(hour: parsedTime.hour, minute: parsedTime.minute),
+          ),
+        ),
       ],
     );
   }
@@ -370,7 +472,11 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  Widget _buildMedicationReminder(PatientTreatment treatment) {
+  Widget _buildMedicationReminder(Map<String, dynamic> treatment) {
+    final parsedTime = DateFormat(
+      'HH:mm:ss',
+    ).parse(treatment['medication_time']);
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -392,8 +498,8 @@ class _TreatmentPageState extends State<TreatmentPage> {
                   onChanged:
                       (value) => _toggleReminder(
                         value,
-                        treatment.medicationTime.hour,
-                        treatment.medicationTime.minute,
+                        parsedTime.hour,
+                        parsedTime.minute,
                       ),
                   activeColor: Colors.green,
                 ),
@@ -406,7 +512,9 @@ class _TreatmentPageState extends State<TreatmentPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              _getNextMedicationTime(treatment.medicationTime),
+              _getNextMedicationTime(
+                TimeOfDay(hour: parsedTime.hour, minute: parsedTime.minute),
+              ),
               style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -417,7 +525,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () => _confirmMedication(treatment.id),
+                onPressed: () => _showUploadDialog(),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   padding: const EdgeInsets.symmetric(vertical: 16),
@@ -441,9 +549,45 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  Widget _buildDrugList(String prescription) {
-    final drugs = _parsePrescription(prescription);
+  void _showUploadDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Konfirmasi Minum Obat'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Apakah Anda sudah minum obat hari ini?'),
+              SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text('Nanti'),
+                    ),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showUploadOptions();
+                      },
+                      child: Text('Konfirmasi'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
+  Widget _buildDrugList(List<dynamic> prescription) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -452,16 +596,9 @@ class _TreatmentPageState extends State<TreatmentPage> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
-        ...drugs.map((drug) => _buildDrugCard(drug)).toList(),
+        ...prescription.map((drug) => _buildDrugCard(drug)).toList(),
       ],
     );
-  }
-
-  // Helper methods
-  double _calculateProgress(DateTime startDate, DateTime endDate) {
-    final totalDays = endDate.difference(startDate).inDays;
-    final passedDays = DateTime.now().difference(startDate).inDays;
-    return (passedDays / totalDays).clamp(0.0, 1.0);
   }
 
   String _calculateDuration(DateTime startDate, DateTime endDate) {
@@ -480,37 +617,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   String _getNextMedicationTime(TimeOfDay medicationTime) {
-    final now = DateTime.now();
-    final nextTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      medicationTime.hour,
-      medicationTime.minute,
-    );
-
-    if (nextTime.isAfter(now)) {
-      return 'Hari ini, ${_formatTime(medicationTime)}';
-    } else {
-      return 'Besok, ${_formatTime(medicationTime)}';
-    }
-  }
-
-  List<Drug> _parsePrescription(String prescription) {
-    // Parse the prescription text into Drug objects
-    // This is a simplified parser - adjust based on your actual prescription format
-    try {
-      final json = jsonDecode(prescription);
-      return (json as List).map((item) => Drug.fromJson(item)).toList();
-    } catch (e) {
-      // Fallback if prescription is not in JSON format
-      return [
-        Drug(name: "Rifampicin", dose: "600mg", time: "Pagi"),
-        Drug(name: "Isoniazid", dose: "300mg", time: "Pagi"),
-        Drug(name: "Pyrazinamide", dose: "1500mg", time: "Pagi"),
-        Drug(name: "Ethambutol", dose: "1200mg", time: "Pagi"),
-      ];
-    }
+    return 'Setiap hari, ${medicationTime.hour}:${medicationTime.minute.toString().padLeft(2, '0')} WIB';
   }
 
   // API interaction methods
@@ -531,32 +638,9 @@ class _TreatmentPageState extends State<TreatmentPage> {
     }
   }
 
-  void _confirmMedication(int treatmentId) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text("Konfirmasi Minum Obat"),
-            content: const Text("Apakah Anda sudah minum semua obat hari ini?"),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text("Nanti"),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text("Konfirmasi"),
-              ),
-            ],
-          ),
-    );
+  void _showUploadOptions() {
+    final ImagePicker _picker = ImagePicker();
 
-    if (confirmed == true) {
-      _showUploadOptions(treatmentId);
-    }
-  }
-
-  void _showUploadOptions(int treatmentId) {
     showModalBottomSheet(
       context: context,
       builder:
@@ -566,24 +650,48 @@ class _TreatmentPageState extends State<TreatmentPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  "Unggah Bukti Minum Obat",
+                  'Unggah Bukti Minum Obat',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 16),
                 ListTile(
-                  leading: const Icon(Icons.camera_alt, color: Colors.blue),
-                  title: const Text("Ambil Foto"),
-                  onTap: () => _takePhoto(treatmentId),
+                  leading: Icon(Icons.camera_alt, color: AppColors.primary),
+                  title: const Text('Ambil Foto'),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final XFile? photo = await _picker.pickImage(
+                      source: ImageSource.camera,
+                    );
+                    if (photo != null) {
+                      _handleSelectedImage(File(photo.path));
+                    }
+                  },
                 ),
                 ListTile(
-                  leading: const Icon(Icons.photo_library, color: Colors.blue),
-                  title: const Text("Pilih dari Galeri"),
-                  onTap: () => _pickPhoto(treatmentId),
+                  leading: Icon(Icons.photo_library, color: AppColors.primary),
+                  title: const Text('Pilih dari Galeri'),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final XFile? image = await _picker.pickImage(
+                      source: ImageSource.gallery,
+                    );
+                    if (image != null) {
+                      _handleSelectedImage(File(image.path));
+                    }
+                  },
                 ),
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: () => _submitWithoutPhoto(treatmentId),
-                  child: const Text("Tanpa Foto"),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Konfirmasi obat berhasil dicatat'),
+                      ),
+                    );
+                    // Jalankan aksi tanpa foto di sini jika perlu
+                  },
+                  child: const Text('Tanpa Foto'),
                 ),
               ],
             ),
@@ -591,42 +699,46 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  Future<void> _takePhoto(int treatmentId) async {
-    Navigator.pop(context);
-    // Implement camera functionality
-    // Then call:
-    // await _apiService.submitMedication(treatmentId, imageFile, DateTime.now());
-  }
+  Future<void> _uploadImage(File imageFile, String patientTreatmentId) async {
+    final url = Uri.parse('${Connection.BASE_URL}/treatments/proof');
 
-  Future<void> _pickPhoto(int treatmentId) async {
-    Navigator.pop(context);
-    // Implement gallery picker
-    // Then call:
-    // await _apiService.submitMedication(treatmentId, imageFile, DateTime.now());
-  }
+    final request = http.MultipartRequest('POST', url);
 
-  Future<void> _submitWithoutPhoto(int treatmentId) async {
-    Navigator.pop(context);
+    // Tambahkan token kalau pakai auth
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token') ?? '';
+    request.headers['Authorization'] = 'Bearer $token';
+
+    // Tambahkan form field dan file
+    request.fields['patient_treatment_id'] = patientTreatmentId;
+    request.files.add(
+      await http.MultipartFile.fromPath('photo', imageFile.path),
+    );
+
     try {
-      await _apiService.submitMedication(treatmentId, null, DateTime.now());
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Konfirmasi obat berhasil dicatat")),
-      );
-      setState(() {});
+      final response = await request.send();
+
+      if (response.statusCode == 201) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Foto berhasil diunggah')));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload gagal: ${response.statusCode}')),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Gagal mencatat konsumsi obat")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Terjadi error: $e')));
     }
   }
 
-  void _showMedicationHistory() async {
-    final history = await _apiService.getMedicationHistory(widget.patientId);
-    // Show history in a dialog or new page
-  }
-
-  void _showTreatmentHistory() {
-    // Implement treatment history
+  void _handleSelectedImage(File imageFile) async {
+    await _uploadImage(
+      imageFile,
+      _patientData['patient_treatment_id'].toString(),
+    );
   }
 
   void _navigateToScreening(String type) {
