@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:developer';
 import 'dart:io';
 import 'package:apk_tb_care/connection.dart';
 import 'package:file_picker/file_picker.dart';
@@ -13,7 +12,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class ConsultationPage extends StatefulWidget {
-  const ConsultationPage({super.key});
+  final bool isStaff;
+
+  const ConsultationPage({super.key, this.isStaff = false});
 
   @override
   State<ConsultationPage> createState() => _ConsultationPageState();
@@ -26,12 +27,24 @@ class _ConsultationPageState extends State<ConsultationPage> {
   bool _isLoading = true;
   File? _attachment;
   String? _attachmentName;
+  String? _currentUserId;
 
   @override
   void initState() {
     super.initState();
-    _loadConsultations();
-    loadRecipients();
+    _getCurrentUserId().then((_) {
+      _loadConsultations();
+      if (widget.isStaff) {
+        loadRecipients();
+      }
+    });
+  }
+
+  Future<void> _getCurrentUserId() async {
+    final session = await SharedPreferences.getInstance();
+    setState(() {
+      _currentUserId = session.getString('user_id');
+    });
   }
 
   Future<void> loadRecipients() async {
@@ -59,7 +72,7 @@ class _ConsultationPageState extends State<ConsultationPage> {
         });
       } else {
         throw Exception(
-          'Failed to load receipents status code ${response.statusCode}',
+          'Failed to load recipients status code ${response.statusCode}',
         );
       }
     } catch (e) {
@@ -68,7 +81,6 @@ class _ConsultationPageState extends State<ConsultationPage> {
           context,
         ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
       }
-      log('Error creating consultation: $e');
     }
   }
 
@@ -77,11 +89,12 @@ class _ConsultationPageState extends State<ConsultationPage> {
     final token = session.getString('token') ?? '';
 
     try {
+      final url = '${Connection.BASE_URL}/consultations';
+
       final response = await http.get(
-        Uri.parse('${Connection.BASE_URL}/consultations'),
+        Uri.parse(url),
         headers: {'Authorization': 'Bearer $token'},
       );
-      log(response.statusCode.toString());
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = jsonDecode(response.body);
@@ -120,8 +133,8 @@ class _ConsultationPageState extends State<ConsultationPage> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(title: Text('Forum Konsultasi')),
-        body: Center(child: CircularProgressIndicator()),
+        appBar: AppBar(title: const Text('Forum Konsultasi')),
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -142,14 +155,16 @@ class _ConsultationPageState extends State<ConsultationPage> {
           Container(
             padding: const EdgeInsets.all(12),
             color: Colors.blue[50],
-            child: const Row(
+            child: Row(
               children: [
-                Icon(Icons.info_outline, size: 18),
-                SizedBox(width: 8),
+                const Icon(Icons.info_outline, size: 18),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Forum ini dibimbing oleh petugas kesehatan. Mohon menjaga etika berkomunikasi.',
-                    style: TextStyle(fontSize: 12),
+                    widget.isStaff
+                        ? 'Anda dapat menghapus konsultasi atau balasan yang tidak pantas'
+                        : 'Forum ini dibimbing oleh petugas kesehatan. Mohon menjaga etika berkomunikasi.',
+                    style: const TextStyle(fontSize: 12),
                   ),
                 ),
               ],
@@ -168,10 +183,13 @@ class _ConsultationPageState extends State<ConsultationPage> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showNewConsultationDialog(),
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton:
+          widget.isStaff
+              ? null
+              : FloatingActionButton(
+                onPressed: () => _showNewConsultationDialog(),
+                child: const Icon(Icons.add),
+              ),
     );
   }
 
@@ -180,6 +198,8 @@ class _ConsultationPageState extends State<ConsultationPage> {
     final isAnswered = consultation['is_answered'] == 1;
     final createdAt = _formatDateTime(consultation['created_at']);
     final isPublic = consultation['recipient_id'] == null;
+    final isOwnedByCurrentUser =
+        consultation['sender_id'].toString() == _currentUserId;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -260,6 +280,15 @@ class _ConsultationPageState extends State<ConsultationPage> {
                   style: TextStyle(color: Colors.blue[600], fontSize: 12),
                 ),
               ],
+              if (widget.isStaff || isOwnedByCurrentUser)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: IconButton(
+                    icon: const Icon(Icons.delete, size: 18),
+                    onPressed:
+                        () => _confirmDeleteConsultation(consultation['id']),
+                  ),
+                ),
             ],
           ),
         ),
@@ -268,6 +297,9 @@ class _ConsultationPageState extends State<ConsultationPage> {
   }
 
   void _showConsultationDetail(Map<String, dynamic> consultation) {
+    final isOwnedByCurrentUser =
+        consultation['sender_id'].toString() == _currentUserId;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -316,15 +348,28 @@ class _ConsultationPageState extends State<ConsultationPage> {
                         sender: consultation['sender_name'] ?? 'Anonim',
                         time: _formatDateTime(consultation['created_at']),
                         attachment: consultation['attachment'],
+                        canDelete: widget.isStaff || isOwnedByCurrentUser,
+                        onDelete:
+                            () =>
+                                _confirmDeleteConsultation(consultation['id']),
                       ),
 
                       // Replies
                       ...(consultation['replies'] as List?)?.map((reply) {
+                            final isReplyOwnedByCurrentUser =
+                                reply['sender_id'].toString() == _currentUserId;
                             return _buildCommentBubble(
                               message: reply['message'] ?? '',
                               sender: reply['sender_name'] ?? 'Pengguna',
                               time: _formatDateTime(reply['created_at']),
                               attachment: reply['attachment'],
+                              canDelete:
+                                  widget.isStaff || isReplyOwnedByCurrentUser,
+                              onDelete:
+                                  () => _confirmDeleteReply(
+                                    consultation['id'],
+                                    reply['id'],
+                                  ),
                             );
                           }) ??
                           [],
@@ -334,7 +379,10 @@ class _ConsultationPageState extends State<ConsultationPage> {
                   ),
                 ),
               ),
-              _buildReplyInput(consultation['id']),
+              if (widget.isStaff ||
+                  consultation['recipient_id'] == null ||
+                  consultation['recipient_id'].toString() == _currentUserId)
+                _buildReplyInput(consultation['id']),
             ],
           ),
         );
@@ -347,6 +395,8 @@ class _ConsultationPageState extends State<ConsultationPage> {
     required String sender,
     required String time,
     String? attachment,
+    bool canDelete = false,
+    VoidCallback? onDelete,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -363,9 +413,20 @@ class _ConsultationPageState extends State<ConsultationPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  sender,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                Row(
+                  children: [
+                    Text(
+                      sender,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    if (canDelete) ...[
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.delete, size: 16),
+                        onPressed: onDelete,
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Container(
@@ -730,7 +791,6 @@ class _ConsultationPageState extends State<ConsultationPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Gagal mengirim balasan: $e')));
-      log(e.toString());
     }
   }
 
@@ -783,8 +843,111 @@ class _ConsultationPageState extends State<ConsultationPage> {
     }
   }
 
+  Future<void> _deleteConsultation(int consultationId) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${Connection.BASE_URL}/consultations/$consultationId/delete',
+        ),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Konsultasi berhasil dihapus')),
+        );
+        _loadConsultations();
+      } else {
+        throw Exception('Failed to delete consultation');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gagal menghapus konsultasi: $e')));
+    }
+  }
+
+  Future<void> _deleteReply(int consultationId, int replyId) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.delete(
+        Uri.parse('${Connection.BASE_URL}/consultations/$replyId/reply'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Balasan berhasil dihapus')),
+        );
+        _loadConsultations();
+      } else {
+        throw Exception('Failed to delete reply ${response.body}');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gagal menghapus balasan: $e')));
+    }
+  }
+
+  void _confirmDeleteConsultation(int consultationId) {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Hapus Konsultasi'),
+            content: const Text(
+              'Apakah Anda yakin ingin menghapus konsultasi ini?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Batal'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _deleteConsultation(consultationId);
+                },
+                child: const Text('Hapus', style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _confirmDeleteReply(int consultationId, int replyId) {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Hapus Balasan'),
+            content: const Text(
+              'Apakah Anda yakin ingin menghapus balasan ini?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Batal'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _deleteReply(consultationId, replyId);
+                },
+                child: const Text('Hapus', style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+    );
+  }
+
   void _viewAttachment(String url) async {
-    // Check if the URL is valid
     if (url.isEmpty) {
       ScaffoldMessenger.of(
         context,
@@ -802,7 +965,6 @@ class _ConsultationPageState extends State<ConsultationPage> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Show different icons based on file type
               _getFileIcon(fileName),
               const SizedBox(height: 16),
               Text('Lampiran: $fileName', textAlign: TextAlign.center),
@@ -815,7 +977,7 @@ class _ConsultationPageState extends State<ConsultationPage> {
             ),
             TextButton(
               onPressed: () async {
-                Navigator.pop(context); // Close dialog first
+                Navigator.pop(context);
                 await _downloadFile(url);
               },
               child: const Text('Unduh'),
@@ -828,24 +990,27 @@ class _ConsultationPageState extends State<ConsultationPage> {
 
   Widget _getFileIcon(String fileName) {
     final ext = fileName.split('.').last.toLowerCase();
-    final iconSize = 48.0;
+    const iconSize = 48.0;
 
     if (['pdf'].contains(ext)) {
-      return const Icon(Icons.picture_as_pdf, size: 48, color: Colors.red);
+      return const Icon(
+        Icons.picture_as_pdf,
+        size: iconSize,
+        color: Colors.red,
+      );
     } else if (['jpg', 'jpeg', 'png', 'gif'].contains(ext)) {
-      return const Icon(Icons.image, size: 48, color: Colors.blue);
+      return const Icon(Icons.image, size: iconSize, color: Colors.blue);
     } else if (['doc', 'docx'].contains(ext)) {
-      return const Icon(Icons.description, size: 48, color: Colors.blue);
+      return const Icon(Icons.description, size: iconSize, color: Colors.blue);
     } else if (['xls', 'xlsx'].contains(ext)) {
-      return const Icon(Icons.table_chart, size: 48, color: Colors.green);
+      return const Icon(Icons.table_chart, size: iconSize, color: Colors.green);
     } else {
-      return const Icon(Icons.insert_drive_file, size: 48);
+      return const Icon(Icons.insert_drive_file, size: iconSize);
     }
   }
 
   Future<void> _downloadFile(String url) async {
     try {
-      // Check Android version
       if (Platform.isAndroid) {
         if (await Permission.storage.isDenied) {
           await Permission.storage.request();

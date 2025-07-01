@@ -1,9 +1,14 @@
-import 'package:apk_tb_care/Main/Petugas/consultation.dart';
+import 'dart:convert';
+import 'package:apk_tb_care/Main/Pasien/consultation.dart';
+import 'package:apk_tb_care/Main/Pasien/education.dart';
 import 'package:apk_tb_care/Main/Petugas/education.dart';
 import 'package:apk_tb_care/Main/Petugas/patient.dart';
+import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/profile.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:apk_tb_care/values/colors.dart';
 
 class StaffHomePage extends StatefulWidget {
@@ -17,127 +22,78 @@ class StaffHomePage extends StatefulWidget {
 
 class _StaffHomePageState extends State<StaffHomePage> {
   int _selectedIndex = 0;
-  late Future<Map<String, dynamic>> _staffHomeData;
-  late final List<Widget> _pages;
+  List<dynamic> _patientData = [];
+  List<Widget> get _pages => [
+    _buildStaffHomePage(),
+    PatientPage(),
+    EducationPage(isStaff: true),
+    ConsultationPage(isStaff: true),
+    ProfilePage(),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _staffHomeData = _fetchStaffHomeData();
-    _pages = [
-      _buildStaffHomePage(),
-      PatientPage(),
-      StaffEducationPage(),
-      StaffConsultationPage(),
-      ProfilePage(),
-    ];
+    _fetchPatientData();
   }
 
-  Future<Map<String, dynamic>> _fetchStaffHomeData() async {
-    // Simulate API calls
-    await Future.delayed(Duration(seconds: 1));
+  Future<void> _fetchPatientData() async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
 
-    return {
-      'patient_count': 24,
-      'new_patients': 3,
-      'adherence_rate': 82.5,
-      'recent_patients': [
-        {
-          'id': 1,
-          'name': 'Budi Santoso',
-          'treatment_day': 45,
-          'total_days': 180,
-          'last_medication': DateTime.now().subtract(Duration(hours: 12)),
-          'adherence': 92,
-          'status': 'Aktif',
-          'photo': 'https://example.com/patient1.jpg',
-        },
-        {
-          'id': 2,
-          'name': 'Ani Wijaya',
-          'treatment_day': 120,
-          'total_days': 180,
-          'last_medication': DateTime.now().subtract(Duration(days: 2)),
-          'adherence': 78,
-          'status': 'Aktif',
-          'photo': 'https://example.com/patient2.jpg',
-        },
-        {
-          'id': 3,
-          'name': 'Citra Dewi',
-          'treatment_day': 15,
-          'total_days': 180,
-          'last_medication': DateTime.now().subtract(Duration(hours: 6)),
-          'adherence': 100,
-          'status': 'Aktif',
-          'photo': 'https://example.com/patient3.jpg',
-        },
-      ],
-      'critical_patients': [
-        {
-          'id': 4,
-          'name': 'Dodi Pratama',
-          'reason': 'Tidak minum obat 3 hari berturut-turut',
-          'status': 'Perlu tindakan',
-        },
-      ],
-      'stats': {
-        'active_treatments': 18,
-        'completed_treatments': 6,
-        'missed_medications': 5,
-      },
-    };
+    try {
+      final response = await http.get(
+        Uri.parse('${Connection.BASE_URL}/patients'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        Map<String, dynamic> dataJson = jsonDecode(response.body);
+        setState(() {
+          _patientData = List<Map<String, dynamic>>.from(dataJson['data']);
+        });
+      } else {
+        throw Exception('Failed to load patient data');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+    }
+  }
+
+  // Helper method to get the first active treatment or null
+  Map<String, dynamic>? _getActiveTreatment(Map<String, dynamic> patient) {
+    if (patient['treatments'] == null || patient['treatments'].isEmpty) {
+      return null;
+    }
+
+    // Find first treatment with status 'Berjalan' or return the first one
+    return patient['treatments'].firstWhere(
+      (t) => t['treatment_status'] == 'Berjalan',
+      orElse: () => patient['treatments'].first,
+    );
   }
 
   Widget _buildStaffHomePage() {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _staffHomeData,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasError) {
-          return Center(child: Text('Gagal memuat data'));
-        }
-
-        final data = snapshot.data!;
-        final adherenceRate = data['adherence_rate'];
-        final stats = data['stats'];
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Greeting Section
-              _buildStaffGreetingSection(),
-              const SizedBox(height: 24),
-
-              // Quick Stats Cards
-              _buildQuickStats(data),
-              const SizedBox(height: 16),
-
-              // Adherence Rate Card
-              _buildAdherenceCard(adherenceRate),
-              const SizedBox(height: 24),
-
-              // Critical Patients
-              // if (data['critical_patients'].length > 0)
-              //   _buildCriticalPatients(data['critical_patients']),
-              // if (data['critical_patients'].length > 0)
-              //   const SizedBox(height: 24),
-
-              // Recent Patients
-              _buildRecentPatientsSection(data['recent_patients']),
-              const SizedBox(height: 16),
-
-              // Full Stats
-              _buildFullStats(stats),
-            ],
-          ),
-        );
-      },
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildStaffGreetingSection(),
+          const SizedBox(height: 24),
+          _buildQuickStats(),
+          const SizedBox(height: 16),
+          _buildAdherenceCard(75), // Using dummy data for adherence rate
+          const SizedBox(height: 24),
+          _buildRecentPatientsSection(),
+          const SizedBox(height: 16),
+          _buildFullStats(),
+        ],
+      ),
     );
   }
 
@@ -155,19 +111,45 @@ class _StaffHomePageState extends State<StaffHomePage> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Anda menangani ${_staffHomeData.then((data) => data['patient_count'])} pasien TB',
+          'Anda menangani ${_patientData.length} pasien TB',
           style: TextStyle(fontSize: 16, color: Colors.grey[600]),
         ),
       ],
     );
   }
 
-  Widget _buildQuickStats(Map<String, dynamic> data) {
+  Widget _buildQuickStats() {
+    // Count total patients
+    final totalPatients = _patientData.length;
+
+    // Count new patients (those with recent start dates in last 30 days)
+    final newPatientsCount =
+        _patientData.where((patient) {
+          final treatment = _getActiveTreatment(patient);
+          if (treatment == null || treatment['start_date'] == null)
+            return false;
+
+          try {
+            final startDate = DateTime.parse(treatment['start_date']);
+            return DateTime.now().difference(startDate).inDays <= 30;
+          } catch (e) {
+            return false;
+          }
+        }).length;
+
+    // Count active treatments
+    final activeTreatmentsCount =
+        _patientData.where((patient) {
+          final treatment = _getActiveTreatment(patient);
+          return treatment != null &&
+              treatment['treatment_status'] == 'Berjalan';
+        }).length;
+
     return Row(
       children: [
         Expanded(
           child: _buildStatCard(
-            value: data['patient_count'].toString(),
+            value: totalPatients.toString(),
             label: 'Total Pasien',
             icon: Icons.group,
             color: Colors.blue,
@@ -176,10 +158,19 @@ class _StaffHomePageState extends State<StaffHomePage> {
         const SizedBox(width: 12),
         Expanded(
           child: _buildStatCard(
-            value: data['new_patients'].toString(),
+            value: newPatientsCount.toString(),
             label: 'Pasien Baru',
             icon: Icons.person_add,
             color: Colors.green,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildStatCard(
+            value: activeTreatmentsCount.toString(),
+            label: 'Pengobatan Aktif',
+            icon: Icons.medical_services,
+            color: Colors.orange,
           ),
         ),
       ],
@@ -302,51 +293,29 @@ class _StaffHomePageState extends State<StaffHomePage> {
     );
   }
 
-  Widget _buildCriticalPatients(List<dynamic> patients) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Pasien Perlu Perhatian',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: AppColors.primary,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          elevation: 2,
-          color: Colors.red[50],
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              children:
-                  patients
-                      .map(
-                        (patient) => ListTile(
-                          leading: Icon(Icons.warning, color: Colors.red),
-                          title: Text(patient['name']),
-                          subtitle: Text(patient['reason']),
-                          trailing: Chip(
-                            label: Text(patient['status']),
-                            backgroundColor: Colors.red[100],
-                            labelStyle: TextStyle(color: Colors.red[800]),
-                          ),
-                          onTap: () {
-                            // Navigate to patient detail
-                          },
-                        ),
-                      )
-                      .toList(),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  Widget _buildRecentPatientsSection() {
+    // Sort patients by most recent treatment start date
+    final sortedPatients = List.from(_patientData);
+    sortedPatients.sort((a, b) {
+      final treatmentA = _getActiveTreatment(a);
+      final treatmentB = _getActiveTreatment(b);
 
-  Widget _buildRecentPatientsSection(List<dynamic> patients) {
+      final dateA =
+          treatmentA?['start_date'] != null
+              ? DateTime.tryParse(treatmentA?['start_date']) ?? DateTime(1970)
+              : DateTime(1970);
+
+      final dateB =
+          treatmentB?['start_date'] != null
+              ? DateTime.tryParse(treatmentB?['start_date']) ?? DateTime(1970)
+              : DateTime(1970);
+
+      return dateB.compareTo(dateA);
+    });
+
+    // Take only the first 5 patients for "recent" section
+    final recentPatients = sortedPatients.take(5).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -367,24 +336,90 @@ class _StaffHomePageState extends State<StaffHomePage> {
                   _selectedIndex = 1; // Navigate to patient list
                 });
               },
-              child: Text('Lihat Semua'),
+              child: const Text('Lihat Semua'),
             ),
           ],
         ),
         const SizedBox(height: 12),
-        Column(
-          children:
-              patients.map((patient) => _buildPatientCard(patient)).toList(),
-        ),
+        if (recentPatients.isEmpty)
+          const Center(child: Text('Tidak ada data pasien')),
+        if (recentPatients.isNotEmpty)
+          Column(
+            children:
+                recentPatients
+                    .map((patient) => _buildPatientCard(patient))
+                    .toList(),
+          ),
       ],
     );
   }
 
   Widget _buildPatientCard(Map<String, dynamic> patient) {
-    final progress = patient['treatment_day'] / patient['total_days'];
-    final lastMedication = DateFormat(
-      'dd/MM HH:mm',
-    ).format(patient['last_medication']);
+    final treatment = _getActiveTreatment(patient);
+
+    // Handle treatment dates
+    DateTime? startDate;
+    DateTime? endDate;
+    int totalDays = 0;
+    int daysPassed = 0;
+    double progress = 0.0;
+    bool hasDates = false;
+
+    if (treatment != null &&
+        treatment['start_date'] != null &&
+        treatment['end_date'] != null) {
+      try {
+        startDate = DateTime.parse(treatment['start_date']);
+        endDate = DateTime.parse(treatment['end_date']);
+        final today = DateTime.now();
+        totalDays = endDate.difference(startDate).inDays;
+        daysPassed =
+            today.isAfter(startDate) ? today.difference(startDate).inDays : 0;
+        progress = totalDays > 0 ? daysPassed / totalDays : 0;
+        hasDates = true;
+      } catch (e) {
+        debugPrint('Error parsing dates: $e');
+      }
+    }
+
+    // Get next visit if available
+    String nextVisitDate = '--/--';
+    String nextVisitTime = '--:--';
+
+    if (treatment != null &&
+        treatment['visits'] != null &&
+        treatment['visits'].isNotEmpty) {
+      // Find the first upcoming visit
+      final upcomingVisits =
+          treatment['visits'].where((visit) {
+            if (visit['visit_date'] == null) return false;
+            try {
+              final visitDate = DateTime.parse(visit['visit_date']);
+              return visitDate.isAfter(DateTime.now());
+            } catch (e) {
+              return false;
+            }
+          }).toList();
+
+      if (upcomingVisits.isNotEmpty) {
+        final nextVisit = upcomingVisits.first;
+        try {
+          nextVisitDate = DateFormat(
+            'dd/MM',
+          ).format(DateTime.parse(nextVisit['visit_date']));
+          if (nextVisit['visit_time'] != null) {
+            nextVisitTime = DateFormat(
+              'HH:mm',
+            ).format(DateFormat('HH:mm:ss').parse(nextVisit['visit_time']));
+          }
+        } catch (e) {
+          debugPrint('Error parsing visit date/time: $e');
+        }
+      }
+    }
+
+    // Get treatment status or default
+    final treatmentStatus = treatment?['treatment_status'] ?? 'Belum Mulai';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -400,8 +435,13 @@ class _StaffHomePageState extends State<StaffHomePage> {
             children: [
               CircleAvatar(
                 radius: 24,
-                backgroundImage: NetworkImage(patient['photo']),
                 backgroundColor: Colors.grey[200],
+                child: Text(
+                  patient['name']?.isNotEmpty == true
+                      ? patient['name'][0]
+                      : '?',
+                  style: const TextStyle(fontSize: 20),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -409,42 +449,49 @@ class _StaffHomePageState extends State<StaffHomePage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      patient['name'],
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                      patient['name'] ?? 'Nama tidak tersedia',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 4),
-                    LinearProgressIndicator(
-                      value: progress,
-                      backgroundColor: Colors.grey[200],
-                      color: AppColors.primary,
-                      minHeight: 4,
-                    ),
+                    if (hasDates)
+                      LinearProgressIndicator(
+                        value: progress.clamp(0.0, 1.0),
+                        backgroundColor: Colors.grey[200],
+                        color: AppColors.primary,
+                        minHeight: 4,
+                      ),
+                    if (!hasDates)
+                      const Text(
+                        'Belum ada jadwal pengobatan',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Text(
-                          'Hari ${patient['treatment_day']}/${patient['total_days']}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
+                        if (hasDates)
+                          Text(
+                            'Hari ${daysPassed.clamp(0, totalDays)}/$totalDays',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
                           ),
-                        ),
                         const Spacer(),
                         Chip(
-                          label: Text('${patient['adherence']}%'),
+                          label: Text(treatmentStatus),
                           backgroundColor:
-                              patient['adherence'] > 80
+                              treatmentStatus == 'Berjalan'
+                                  ? Colors.blue[100]
+                                  : treatmentStatus == 'Selesai'
                                   ? Colors.green[100]
-                                  : patient['adherence'] > 60
-                                  ? Colors.orange[100]
-                                  : Colors.red[100],
+                                  : Colors.grey[200],
                           labelStyle: TextStyle(
                             color:
-                                patient['adherence'] > 80
+                                treatmentStatus == 'Berjalan'
+                                    ? Colors.blue[800]
+                                    : treatmentStatus == 'Selesai'
                                     ? Colors.green[800]
-                                    : patient['adherence'] > 60
-                                    ? Colors.orange[800]
-                                    : Colors.red[800],
+                                    : Colors.grey[800],
                             fontSize: 12,
                           ),
                           padding: EdgeInsets.zero,
@@ -457,13 +504,20 @@ class _StaffHomePageState extends State<StaffHomePage> {
               const SizedBox(width: 12),
               Column(
                 children: [
-                  Text(
-                    'Terakhir',
+                  const Text(
+                    'Kunjungan',
                     style: TextStyle(fontSize: 10, color: Colors.grey),
                   ),
                   Text(
-                    lastMedication,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    nextVisitDate,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    nextVisitTime,
+                    style: const TextStyle(fontSize: 10, color: Colors.grey),
                   ),
                 ],
               ),
@@ -474,7 +528,34 @@ class _StaffHomePageState extends State<StaffHomePage> {
     );
   }
 
-  Widget _buildFullStats(Map<String, dynamic> stats) {
+  Widget _buildFullStats() {
+    // Count treatment statuses
+    int activeCount = 0;
+    int completedCount = 0;
+    int failedCount = 0;
+    int deceasedCount = 0;
+
+    for (var patient in _patientData) {
+      if (patient['treatments'] != null) {
+        for (var treatment in patient['treatments']) {
+          switch (treatment['treatment_status']) {
+            case 'Berjalan':
+              activeCount++;
+              break;
+            case 'Selesai':
+              completedCount++;
+              break;
+            case 'Gagal':
+              failedCount++;
+              break;
+            case 'Meninggal':
+              deceasedCount++;
+              break;
+          }
+        }
+      }
+    }
+
     return Card(
       elevation: 2,
       child: Padding(
@@ -495,14 +576,24 @@ class _StaffHomePageState extends State<StaffHomePage> {
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _buildMiniStatCard(
-                  value: stats['active_treatments'].toString(),
+                  value: activeCount.toString(),
                   label: 'Aktif',
                   color: Colors.blue,
                 ),
                 _buildMiniStatCard(
-                  value: stats['completed_treatments'].toString(),
+                  value: completedCount.toString(),
                   label: 'Selesai',
                   color: Colors.green,
+                ),
+                _buildMiniStatCard(
+                  value: failedCount.toString(),
+                  label: 'Gagal',
+                  color: Colors.red,
+                ),
+                _buildMiniStatCard(
+                  value: deceasedCount.toString(),
+                  label: 'Meninggal',
+                  color: Colors.redAccent,
                 ),
               ],
             ),
@@ -522,7 +613,7 @@ class _StaffHomePageState extends State<StaffHomePage> {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
+            color: color.withOpacity(0.1),
             shape: BoxShape.circle,
           ),
           child: Text(
@@ -556,10 +647,13 @@ class _StaffHomePageState extends State<StaffHomePage> {
         ),
         actions: [
           IconButton(
-            icon: Badge(smallSize: 8, child: Icon(Icons.notifications_none)),
+            icon: const Badge(
+              smallSize: 8,
+              child: Icon(Icons.notifications_none),
+            ),
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Belum ada notifikasi baru')),
+                const SnackBar(content: Text('Belum ada notifikasi baru')),
               );
             },
           ),

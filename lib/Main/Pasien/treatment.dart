@@ -3,6 +3,7 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:apk_tb_care/Main/Pasien/history.dart';
+import 'package:apk_tb_care/Main/Pasien/treatment_history.dart';
 import 'package:apk_tb_care/Section/screening.dart';
 import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/data/medication_record.dart';
@@ -28,9 +29,22 @@ class TreatmentPage extends StatefulWidget {
 }
 
 class _TreatmentPageState extends State<TreatmentPage> {
-  late Future<Map<String, dynamic>> _treatmentFuture;
+  late Future<Map<String, dynamic>> _patientFuture;
   late Map<String, dynamic> _patientData;
   bool _notifIsActive = false;
+  List<dynamic> _treatments = [];
+  Map<String, dynamic>? _currentTreatment;
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  @override
+  void initState() {
+    super.initState();
+    tz.initializeTimeZones();
+    _initNotifications();
+    _patientFuture = _fetchPatientData();
+    _getSharedPreferences();
+  }
 
   void _getSharedPreferences() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -38,31 +52,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
       _notifIsActive = prefs.getBool('notifIsActive') ?? false;
     });
     log(prefs.getInt('hour').toString());
-  }
-
-  Future<void> _setNotificationTZ(int hour, int minute) async {
-    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-
-    await flutterLocalNotificationsPlugin.zonedSchedule(
-      1,
-      'Reminder Pengobatan',
-      'Saatnya minum obat! jangan lupa ya!',
-      _nextInstanceOf(hour, minute),
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'reminder_channel',
-          'Pengingat Harian',
-          channelDescription:
-              'Channel untuk pengingat harian seperti minum obat',
-          importance: Importance.high,
-          priority: Priority.high,
-          playSound: true,
-          enableVibration: true,
-        ),
-      ),
-      androidScheduleMode: AndroidScheduleMode.inexact,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
   }
 
   tz.TZDateTime _nextInstanceOf(int hour, int minute) {
@@ -81,39 +70,184 @@ class _TreatmentPageState extends State<TreatmentPage> {
     return scheduledDate;
   }
 
-  void _setNotificationStatus(bool status, int hour, int minute) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+  Future<void> _initNotifications() async {
+    // Initialize notification channels
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    final InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+    // Create medication reminder channel
+    const AndroidNotificationChannel medicationChannel =
+        AndroidNotificationChannel(
+          'reminder_channel',
+          'Pengingat Harian',
+          description: 'Channel untuk pengingat harian seperti minum obat',
+          importance: Importance.high,
+        );
+
+    // Create visit reminder channel
+    const AndroidNotificationChannel visitChannel = AndroidNotificationChannel(
+      'visit_channel',
+      'Pengingat Kunjungan',
+      description: 'Channel untuk pengingat kunjungan pengobatan',
+      importance: Importance.high,
+    );
+
+    final androidPlatform =
+        flutterLocalNotificationsPlugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
+
+    await androidPlatform?.createNotificationChannel(medicationChannel);
+    await androidPlatform?.createNotificationChannel(visitChannel);
+  }
+
+  Future<void> _setNotificationStatus(bool status, int hour, int minute) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // Request notification permission if not granted
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
-    setState(() {
-      _notifIsActive = status;
-      prefs.setBool('notifIsActive', status);
-      if (_notifIsActive) {
-        _setNotificationTZ(hour, minute);
-      } else {
-        FlutterLocalNotificationsPlugin().cancelAll();
+
+    if (await Permission.notification.isGranted) {
+      setState(() {
+        _notifIsActive = status;
+        prefs.setBool('notifIsActive', status);
+        if (_notifIsActive) {
+          _setNotificationTZ(hour, minute);
+        } else {
+          flutterLocalNotificationsPlugin.cancel(
+            0,
+          ); // Cancel medication reminders
+        }
+      });
+    }
+  }
+
+  Future<void> _setNotificationTZ(int hour, int minute) async {
+    // Check and request exact alarm permission first
+    if (await _checkExactAlarmPermission()) {
+      await flutterLocalNotificationsPlugin.zonedSchedule(
+        0,
+        'Reminder Pengobatan',
+        'Saatnya minum obat! Jangan lupa ya!',
+        _nextInstanceOf(hour, minute),
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'reminder_channel',
+            'Pengingat Harian',
+            channelDescription:
+                'Channel untuk pengingat harian seperti minum obat',
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: true,
+            enableVibration: true,
+          ),
+        ),
+        androidScheduleMode:
+            AndroidScheduleMode.inexactAllowWhileIdle, // Changed to inexact
+        matchDateTimeComponents: DateTimeComponents.time,
+      );
+    }
+  }
+
+  Future<bool> _checkExactAlarmPermission() async {
+    if (await Permission.scheduleExactAlarm.isGranted) {
+      return true;
+    }
+
+    // Request permission if not granted
+    final status = await Permission.scheduleExactAlarm.request();
+    if (status.isGranted) {
+      return true;
+    }
+
+    // If permission denied, show explanation and open settings
+    if (await Permission.scheduleExactAlarm.isPermanentlyDenied) {
+      await showDialog(
+        context: context,
+        builder:
+            (context) => AlertDialog(
+              title: const Text('Permission Required'),
+              content: const Text(
+                'This app needs exact alarm permission to show timely medication reminders. '
+                'Please enable it in app settings.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => openAppSettings(),
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+      );
+    }
+    return false;
+  }
+
+  Future<void> _scheduleVisitNotifications(List<dynamic> visits) async {
+    // Batalkan semua notifikasi kunjungan sebelumnya (ID dimulai dari 100)
+    await flutterLocalNotificationsPlugin.cancel(100);
+
+    for (final visit in visits) {
+      final visitDate = DateTime.parse(visit['visit_date']);
+      final visitTime = visit['visit_time'].split(':');
+      final hour = int.parse(visitTime[0]);
+      final minute = int.parse(visitTime[1]);
+
+      final scheduledDate = tz.TZDateTime(
+        tz.local,
+        visitDate.year,
+        visitDate.month,
+        visitDate.day,
+        hour,
+        minute,
+      );
+
+      // Jadwalkan 1 jam sebelum kunjungan
+      final reminderDate = scheduledDate.subtract(const Duration(hours: 1));
+
+      if (reminderDate.isAfter(tz.TZDateTime.now(tz.local))) {
+        await flutterLocalNotificationsPlugin.zonedSchedule(
+          100 + visits.indexOf(visit), // ID unik untuk setiap kunjungan
+          'Kunjungan Pengobatan',
+          'Anda memiliki jadwal kunjungan pengobatan dalam 1 jam',
+          reminderDate,
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'visit_channel',
+              'Pengingat Kunjungan',
+              channelDescription:
+                  'Channel untuk pengingat kunjungan pengobatan',
+              importance: Importance.high,
+              priority: Priority.high,
+            ),
+          ),
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          matchDateTimeComponents: DateTimeComponents.dateAndTime,
+        );
       }
-    });
+    }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _treatmentFuture = _fetchPatientData();
-    _getSharedPreferences();
-    tz.initializeTimeZones();
-  }
-
+  // Update _fetchPatientData to schedule visit notifications
   Future<Map<String, dynamic>> _fetchPatientData() async {
     final session = await SharedPreferences.getInstance();
     final token = session.getString('token') ?? '';
 
     try {
       final response = await http.get(
-        Uri.parse(
-          '${Connection.BASE_URL}/patients/${widget.patientId}/treatments',
-        ),
+        Uri.parse('${Connection.BASE_URL}/patients/${widget.patientId}/show'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -121,32 +255,24 @@ class _TreatmentPageState extends State<TreatmentPage> {
       );
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> dataJson = jsonDecode(response.body);
-        log(dataJson['data'][0].toString());
-        final Map<String, dynamic> data =
-            dataJson.isNotEmpty ? dataJson['data'][0] : {};
-
-        final patientDetailResponse = await http.get(
-          Uri.parse('${Connection.BASE_URL}/patients/${widget.patientId}/show'),
-          headers: {'Authorization': 'Bearer $token'},
-        );
-
-        if (patientDetailResponse.statusCode == 200) {
-          final Map<String, dynamic> dataJson3 = jsonDecode(
-            patientDetailResponse.body,
-          );
-          setState(() {
-            _patientData = dataJson3['data'];
-          });
-          // log(dataJson3['data'].toString());
-        }
-
-        return data;
+        final Map<String, dynamic> data = jsonDecode(response.body);
+        setState(() {
+          _patientData = data['data'];
+          _treatments = data['data']['treatments'] ?? [];
+          if (_treatments.isNotEmpty) {
+            _currentTreatment = _treatments.first;
+            // Schedule visit notifications if visits exist
+            if (_currentTreatment?['visits'] != null) {
+              _scheduleVisitNotifications(_currentTreatment!['visits']);
+            }
+          }
+        });
+        return data['data'];
       } else {
-        throw Exception('Failed to load home data');
+        throw Exception('Failed to load patient data');
       }
     } catch (e) {
-      print('Error fetching home data: $e');
+      log('Error fetching patient data: $e');
       return {};
     }
   }
@@ -172,39 +298,38 @@ class _TreatmentPageState extends State<TreatmentPage> {
         ],
       ),
       body: FutureBuilder<Map<String, dynamic>>(
-        future: _treatmentFuture,
+        future: _patientFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           } else if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
-          } else if (!snapshot.hasData) {
+          } else if (!snapshot.hasData || _currentTreatment == null) {
             return const Center(child: Text('Tidak ada data pengobatan'));
           }
 
-          final treatment = snapshot.data!;
-          log(treatment.toString());
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Status Card
-                _buildStatusCard(treatment),
+                _buildStatusCard(_currentTreatment!),
                 const SizedBox(height: 24),
 
                 // Regimen Details
-                _buildRegimenDetails(treatment),
+                _buildRegimenDetails(_currentTreatment!),
                 const SizedBox(height: 24),
 
                 // Medication Reminder
-                _buildMedicationReminder(treatment),
+                if (_currentTreatment!['medication_time'] != null)
+                  _buildMedicationReminder(_currentTreatment!),
                 const SizedBox(height: 24),
 
                 // Drug
-                if (treatment['prescription'] != null &&
-                    treatment['prescription'].isNotEmpty)
-                  _buildDrugList(treatment['prescription']),
+                if (_currentTreatment!['prescription'] != null &&
+                    _currentTreatment!['prescription'].isNotEmpty)
+                  _buildDrugList(_currentTreatment!['prescription']),
                 const SizedBox(height: 24),
 
                 // Screening Section
@@ -238,15 +363,15 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
   Widget _buildScreeningButton(String title, IconData icon) {
     return OutlinedButton.icon(
+      label: Text(title),
       onPressed: () => _navigateToScreening(title),
+      icon: Icon(icon, color: Colors.blue),
       style: OutlinedButton.styleFrom(
         alignment: Alignment.centerLeft,
         fixedSize: Size(double.maxFinite, 48),
         padding: const EdgeInsets.symmetric(horizontal: 12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
-      icon: Icon(icon, color: Colors.blue),
-      label: Text(title),
     );
   }
 
@@ -288,15 +413,16 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   Widget _buildStatusCard(Map<String, dynamic> treatmentData) {
-    log(treatmentData.toString());
     // Hitung progress jika data tersedia
     final currentDay = _calculateCurrentDay(
       treatmentData['start_date'],
       treatmentData['end_date'],
     );
-    final totalDays = treatmentData['treatment_days'] ?? 1;
+    final totalDays = _calculateTotalDays(
+      treatmentData['start_date'],
+      treatmentData['end_date'],
+    );
     final progress = currentDay / totalDays;
-    log('Progress: $progress');
 
     return Card(
       elevation: 2,
@@ -307,18 +433,40 @@ class _TreatmentPageState extends State<TreatmentPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(Icons.medical_services, color: AppColors.primary),
-                const SizedBox(width: 8),
-                Text(
-                  'Status Pengobatan',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.medical_services, color: AppColors.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Status Pengobatan',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: const Icon(Icons.history),
+                  onPressed:
+                      () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (builder) => TreatmentHistoryPage(
+                                patientId: widget.patientId,
+                              ),
+                        ),
+                      ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
-              treatmentData['treatment_type'] ?? 'Tidak ada jenis pengobatan',
+              "Pengobatan TB",
               style: TextStyle(fontSize: 16, color: Colors.grey[700]),
             ),
             const SizedBox(height: 16),
@@ -383,7 +531,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
-  // Helper functions
   int _calculateCurrentDay(String? startDate, String? endDate) {
     if (startDate == null || endDate == null) return 0;
 
@@ -398,6 +545,18 @@ class _TreatmentPageState extends State<TreatmentPage> {
       return today.difference(start).inDays;
     } catch (e) {
       return 0;
+    }
+  }
+
+  int _calculateTotalDays(String? startDate, String? endDate) {
+    if (startDate == null || endDate == null) return 1;
+
+    try {
+      final start = DateTime.parse(startDate);
+      final end = DateTime.parse(endDate);
+      return end.difference(start).inDays;
+    } catch (e) {
+      return 1;
     }
   }
 
@@ -428,9 +587,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
       DateTime.parse(treatment['start_date']),
       DateTime.parse(treatment['end_date']),
     );
-    final parsedTime = DateFormat(
-      'HH:mm:ss',
-    ).parse(treatment['medication_time']);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -449,12 +605,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
           _formatDate(DateTime.parse(treatment['end_date'])),
         ),
         _buildDetailRow("Durasi", duration),
-        _buildDetailRow(
-          "Waktu Minum",
-          _formatTime(
-            TimeOfDay(hour: parsedTime.hour, minute: parsedTime.minute),
-          ),
-        ),
       ],
     );
   }
@@ -473,9 +623,8 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   Widget _buildMedicationReminder(Map<String, dynamic> treatment) {
-    final parsedTime = DateFormat(
-      'HH:mm:ss',
-    ).parse(treatment['medication_time']);
+    // Default medication time if not provided
+    final medicationTime = TimeOfDay(hour: 8, minute: 0);
 
     return Card(
       elevation: 2,
@@ -498,8 +647,8 @@ class _TreatmentPageState extends State<TreatmentPage> {
                   onChanged:
                       (value) => _toggleReminder(
                         value,
-                        parsedTime.hour,
-                        parsedTime.minute,
+                        medicationTime.hour,
+                        medicationTime.minute,
                       ),
                   activeColor: Colors.green,
                 ),
@@ -512,9 +661,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
             ),
             const SizedBox(height: 4),
             Text(
-              _getNextMedicationTime(
-                TimeOfDay(hour: parsedTime.hour, minute: parsedTime.minute),
-              ),
+              _getNextMedicationTime(medicationTime),
               style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -554,28 +701,28 @@ class _TreatmentPageState extends State<TreatmentPage> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('Konfirmasi Minum Obat'),
+          title: const Text('Konfirmasi Minum Obat'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Apakah Anda sudah minum obat hari ini?'),
-              SizedBox(height: 16),
+              const Text('Apakah Anda sudah minum obat hari ini?'),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(context),
-                      child: Text('Nanti'),
+                      child: const Text('Nanti'),
                     ),
                   ),
-                  SizedBox(width: 16),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () {
                         Navigator.pop(context);
                         _showUploadOptions();
                       },
-                      child: Text('Konfirmasi'),
+                      child: const Text('Konfirmasi'),
                     ),
                   ),
                 ],
@@ -620,7 +767,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
     return 'Setiap hari, ${medicationTime.hour}:${medicationTime.minute.toString().padLeft(2, '0')} WIB';
   }
 
-  // API interaction methods
   void _toggleReminder(bool value, int hour, int minute) async {
     try {
       setState(() {
@@ -689,7 +835,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
                         content: Text('Konfirmasi obat berhasil dicatat'),
                       ),
                     );
-                    // Jalankan aksi tanpa foto di sini jika perlu
                   },
                   child: const Text('Tanpa Foto'),
                 ),
@@ -735,10 +880,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   void _handleSelectedImage(File imageFile) async {
-    await _uploadImage(
-      imageFile,
-      _patientData['patient_treatment_id'].toString(),
-    );
+    await _uploadImage(imageFile, _currentTreatment!['id'].toString());
   }
 
   void _navigateToScreening(String type) {
@@ -750,78 +892,5 @@ class _TreatmentPageState extends State<TreatmentPage> {
         break;
       default:
     }
-  }
-}
-
-class TreatmentType {
-  final int id;
-  final String name;
-  final int duration;
-  final String durationUnit;
-  final String description;
-
-  TreatmentType({
-    required this.id,
-    required this.name,
-    required this.duration,
-    required this.durationUnit,
-    required this.description,
-  });
-}
-
-class Drug {
-  final String name;
-  final String dose;
-  final String time;
-
-  Drug({required this.name, required this.dose, required this.time});
-
-  factory Drug.fromJson(Map<String, dynamic> json) {
-    return Drug(name: json['name'], dose: json['dose'], time: json['time']);
-  }
-}
-
-// Mock API Service
-class ApiService {
-  Future<PatientTreatment> getPatientTreatment(int patientId) async {
-    // Mock API call
-    await Future.delayed(const Duration(seconds: 1));
-    return PatientTreatment(
-      id: 1,
-      patientId: patientId,
-      patientName: "John Doe",
-      treatmentType: "Pengobatan TB",
-      treatmentTypeId: 1,
-      currentDay: 30,
-      totalDays: 180,
-      adherenceRate: 0.85,
-      diagnosisDate: DateTime(2024, 6, 1),
-      startDate: DateTime(2024, 6, 15),
-      endDate: DateTime(2026, 12, 15),
-      medicationTime: const TimeOfDay(hour: 8, minute: 0),
-      prescription: jsonEncode([
-        {"name": "Rifampicin", "dose": "600mg", "time": "Pagi"},
-        {"name": "Isoniazid", "dose": "300mg", "time": "Pagi"},
-        {"name": "Pyrazinamide", "dose": "1500mg", "time": "Pagi"},
-        {"name": "Ethambutol", "dose": "1200mg", "time": "Pagi"},
-      ]),
-      status: 1,
-    );
-  }
-
-  Future<bool> getReminderStatus(int patientId) async {
-    return true;
-  }
-
-  Future<void> submitMedication(
-    int treatmentId,
-    File? image,
-    DateTime takenAt,
-  ) async {
-    // Implement actual API call to POST /api/medication/submit
-  }
-
-  Future<List<MedicationRecord>> getMedicationHistory(int patientId) async {
-    return [];
   }
 }

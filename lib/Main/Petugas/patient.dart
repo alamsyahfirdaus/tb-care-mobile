@@ -1,24 +1,15 @@
-import 'package:apk_tb_care/Main/Petugas/medication_validation.dart';
-import 'package:apk_tb_care/data/medication_record.dart';
-import 'package:apk_tb_care/data/patient.dart';
-import 'package:apk_tb_care/data/patient_treatment.dart';
-
+import 'dart:convert';
+import 'package:apk_tb_care/Main/Pasien/history.dart';
+import 'package:apk_tb_care/Main/Petugas/add_patient.dart';
+import 'package:apk_tb_care/Main/Petugas/edit_patient.dart';
+import 'package:apk_tb_care/Main/Petugas/treatment_managment.dart';
+import 'package:apk_tb_care/Main/Petugas/visit_managment.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:fl_chart/fl_chart.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:http/http.dart' as http;
+import 'package:apk_tb_care/connection.dart';
 
-// Models
-
-class AdherenceData {
-  final DateTime date;
-  final double adherenceRate;
-
-  AdherenceData(this.date, this.adherenceRate);
-}
-
-// Main Page
 class PatientPage extends StatefulWidget {
   const PatientPage({super.key});
 
@@ -27,316 +18,80 @@ class PatientPage extends StatefulWidget {
 }
 
 class _PatientPageState extends State<PatientPage> {
-  late List<Patient> _patients = [];
-  late List<PatientTreatment> _treatments = [];
-  late List<MedicationRecord> _medicationRecords = [];
-  late List<AdherenceData> _adherenceData = [];
+  List<dynamic> _patientData = [];
   final TextEditingController _searchController = TextEditingController();
-  int _coordinatorId = 1;
-  int _selectedFilter = 0; // 0=All, 1=Active, 2=Completed, 3=Failed
+  String _selectedFilter = 'all'; // all, active, completed
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _fetchPatientData();
   }
 
-  Future<void> _loadData() async {
-    await _getUserId();
-    setState(() {
-      _patients = _generateDummyPatients();
-      _treatments = _generateDummyTreatments();
-      _medicationRecords = _generateDummyMedicationRecords();
-      _adherenceData = _generateAdherenceData();
-    });
-  }
-
-  List<MedicationRecord> _generateDummyMedicationRecords() {
-    return [
-      MedicationRecord(
-        id: 1,
-        patientTreatmentId: 1,
-        photoUrl: 'https://example.com/medication1.jpg',
-        takenAt: DateTime.now().subtract(Duration(days: 1)),
-        status: 'verified',
-        verifiedBy: 'Dr. Andi',
-      ),
-      MedicationRecord(
-        id: 2,
-        patientTreatmentId: 3,
-        photoUrl: 'https://example.com/medication2.jpg',
-        takenAt: DateTime.now().subtract(Duration(days: 2)),
-        status: 'verified',
-        verifiedBy: 'Dr. Budi',
-      ),
-      MedicationRecord(
-        id: 3,
-        patientTreatmentId: 1,
-        photoUrl: null,
-        takenAt: DateTime.now().subtract(Duration(days: 3)),
-        status: 'pending',
-        verifiedBy: 'Dr. Budi',
-        notes: null,
-      ),
-      MedicationRecord(
-        id: 4,
-        patientTreatmentId: 1,
-        photoUrl: 'https://example.com/medication4.jpg',
-        takenAt: DateTime.now().subtract(Duration(days: 4)),
-        status: 'rejected',
-        notes: 'Foto tidak jelas',
-        verifiedBy: 'Dr. Citra',
-      ),
-      MedicationRecord(
-        id: 5,
-        patientTreatmentId: 2,
-        photoUrl: 'https://example.com/medication5.jpg',
-        takenAt: DateTime.now().subtract(Duration(days: 5)),
-        status: 'verified',
-        verifiedBy: 'Dr. Andi',
-      ),
-    ];
-  }
-
-  List<AdherenceData> _generateAdherenceData() {
-    return [
-      AdherenceData(DateTime.now().subtract(Duration(days: 30)), 85),
-      AdherenceData(DateTime.now().subtract(Duration(days: 25)), 90),
-      AdherenceData(DateTime.now().subtract(Duration(days: 20)), 78),
-      AdherenceData(DateTime.now().subtract(Duration(days: 15)), 92),
-      AdherenceData(DateTime.now().subtract(Duration(days: 10)), 88),
-      AdherenceData(DateTime.now().subtract(Duration(days: 5)), 95),
-      AdherenceData(DateTime.now().subtract(Duration(days: 1)), 100),
-    ];
-  }
-
-  List<Patient> _generateDummyPatients() {
-    return [
-      Patient(
-        id: 1,
-        name: 'Budi Santoso',
-        nik: '3273010101010001',
-        code: 'PSN001',
-        address: 'Jl. Merdeka No. 10, Jakarta',
-        phone: '081234567890',
-        subdistrictId: 101,
-        puskesmasId: 1,
-        height: 170,
-        weight: 65,
-        bloodType: 'A',
-        diagnosisDate: DateTime(2023, 1, 15),
-      ),
-      Patient(
-        id: 2,
-        name: 'Ani Wijaya',
-        nik: '3273010202020002',
-        code: 'PSN002',
-        address: 'Jl. Sudirman No. 20, Jakarta',
-        phone: '081234567891',
-        subdistrictId: 102,
-        puskesmasId: 1,
-        height: 160,
-        weight: 55,
-        bloodType: 'B',
-        diagnosisDate: DateTime(2023, 2, 10),
-      ),
-      Patient(
-        id: 3,
-        name: 'Citra Dewi',
-        nik: '3273010303030003',
-        code: 'PSN003',
-        address: 'Jl. Thamrin No. 30, Jakarta',
-        phone: '081234567892',
-        subdistrictId: 103,
-        puskesmasId: 1,
-        height: 155,
-        weight: 50,
-        bloodType: 'O',
-        diagnosisDate: DateTime(2023, 3, 5),
-      ),
-      Patient(
-        id: 4,
-        name: 'Dodi Pratama',
-        nik: '3273010404040004',
-        code: 'PSN004',
-        address: 'Jl. Gatot Subroto No. 40, Jakarta',
-        phone: '081234567893',
-        subdistrictId: 104,
-        puskesmasId: 1,
-        height: 175,
-        weight: 70,
-        bloodType: 'AB',
-        diagnosisDate: DateTime(2023, 4, 20),
-      ),
-      Patient(
-        id: 5,
-        name: 'Eka Sari',
-        nik: '3273010505050005',
-        code: 'PSN005',
-        address: 'Jl. Hayam Wuruk No. 50, Jakarta',
-        phone: '081234567894',
-        subdistrictId: 105,
-        puskesmasId: 1,
-        height: 165,
-        weight: 60,
-        bloodType: 'A',
-        diagnosisDate: DateTime(2023, 5, 15),
-      ),
-    ];
-  }
-
-  List<PatientTreatment> _generateDummyTreatments() {
-    final now = DateTime.now();
-    return [
-      PatientTreatment(
-        id: 1,
-        patientId: 1,
-        treatmentTypeId: 3,
-        diagnosisDate: DateTime(2024, 3, 1),
-        medicationTime: TimeOfDay(hour: 8, minute: 0),
-        patientName: 'Budi Santoso',
-        treatmentType: 'Regimen TB Kategori 1',
-        startDate: DateTime(2023, 6, 1),
-        endDate: DateTime(2023, 12, 1),
-        status: 1, // Active
-        currentDay: (now.difference(DateTime(2023, 6, 1)).inDays),
-        totalDays: 180,
-        adherenceRate: 92.5,
-      ),
-      PatientTreatment(
-        id: 2,
-        patientId: 2,
-        patientName: 'Ani Wijaya',
-        treatmentTypeId: 3,
-        diagnosisDate: DateTime(2024, 3, 1),
-        medicationTime: TimeOfDay(hour: 8, minute: 0),
-        treatmentType: 'Regimen TB Kategori 1',
-        startDate: DateTime(2023, 5, 15),
-        endDate: DateTime(2023, 11, 15),
-        status: 1, // Active
-        currentDay: (now.difference(DateTime(2023, 5, 15)).inDays),
-        totalDays: 180,
-        adherenceRate: 85.0,
-      ),
-      PatientTreatment(
-        id: 3,
-        patientId: 3,
-        patientName: 'Citra Dewi',
-        treatmentTypeId: 3,
-        diagnosisDate: DateTime(2024, 3, 1),
-        medicationTime: TimeOfDay(hour: 8, minute: 0),
-        treatmentType: 'Regimen TB Kategori 2',
-        startDate: DateTime(2023, 7, 1),
-        endDate: DateTime(2024, 1, 1),
-        status: 1, // Active
-        currentDay: (now.difference(DateTime(2023, 7, 1)).inDays),
-        totalDays: 180,
-        adherenceRate: 78.3,
-      ),
-      PatientTreatment(
-        id: 4,
-        patientId: 4,
-        treatmentTypeId: 2,
-        diagnosisDate: DateTime(2024, 3, 1),
-        medicationTime: TimeOfDay(hour: 8, minute: 0),
-        patientName: 'Dodi Pratama',
-        treatmentType: 'Regimen TB Kategori 1',
-        startDate: DateTime(2023, 4, 1),
-        endDate: DateTime(2023, 10, 1),
-        status: 3, // Failed
-        currentDay: (now.difference(DateTime(2023, 4, 1)).inDays),
-        totalDays: 180,
-        adherenceRate: 45.2,
-      ),
-      PatientTreatment(
-        id: 5,
-        patientId: 5,
-        treatmentTypeId: 1,
-        patientName: 'Eka Sari',
-        treatmentType: 'Regimen TB Kategori 1',
-        startDate: DateTime(2023, 3, 1),
-        endDate: DateTime(2023, 9, 1),
-        status: 2, // Completed
-        currentDay: (now.difference(DateTime(2023, 3, 1)).inDays),
-        diagnosisDate: DateTime(2023, 3, 1),
-        medicationTime: TimeOfDay(hour: 8, minute: 0),
-        totalDays: 180,
-        adherenceRate: 95.8,
-      ),
-    ];
-  }
-
-  List<MedicationRecord> _generateMedicationHistory(int treatmentId) {
-    return [
-      MedicationRecord(
-        id: 1,
-        patientTreatmentId: 1,
-
-        photoUrl: 'https://example.com/medication1.jpg',
-        takenAt: DateTime.now().subtract(Duration(days: 1)),
-        status: 'verified',
-      ),
-      MedicationRecord(
-        id: 2,
-        patientTreatmentId: 2,
-
-        photoUrl: 'https://example.com/medication2.jpg',
-        takenAt: DateTime.now().subtract(Duration(days: 2)),
-        status: 'verified',
-      ),
-      MedicationRecord(
-        id: 3,
-        patientTreatmentId: 3,
-
-        photoUrl: null,
-        takenAt: DateTime.now().subtract(Duration(days: 3)),
-        status: 'pending',
-        notes: 'Lupa upload foto',
-      ),
-    ];
-  }
-
-  Future<void> _getUserId() async {
+  Future<void> _fetchPatientData() async {
     final session = await SharedPreferences.getInstance();
-    final userId = session.getInt('userId');
-    setState(() {
-      _coordinatorId = userId ?? 1;
-    });
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.get(
+        Uri.parse('${Connection.BASE_URL}/patients'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        Map<String, dynamic> dataJson = jsonDecode(response.body);
+        setState(() {
+          _patientData = List<Map<String, dynamic>>.from(dataJson['data']);
+        });
+      } else {
+        throw Exception('Failed to load patient data');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+    }
   }
 
-  // Data generation methods (to be replaced with API calls)
+  // Helper method to get the first active treatment or null
+  Map<String, dynamic>? _getActiveTreatment(Map<String, dynamic> patient) {
+    if (patient['treatments'] == null || patient['treatments'].isEmpty) {
+      return null;
+    }
+
+    // Find first treatment with status 'Berjalan' or return the first one
+    return patient['treatments'].firstWhere(
+      (t) => t['treatment_status'] == 'Berjalan',
+      orElse: () => patient['treatments'].first,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Manajemen Pasien'),
           bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Daftar Pasien'),
-              Tab(text: 'Pengobatan'),
-              Tab(text: 'Validasi Obat'),
-            ],
+            tabs: [Tab(text: 'Daftar Pasien'), Tab(text: 'Pengobatan')],
           ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.add),
-              onPressed: _showAddPatientDialog,
-              tooltip: 'Tambah Pasien Baru',
-            ),
-          ],
         ),
         body: TabBarView(
-          children: [
-            // Tab 1: Patient List
-            _buildPatientListTab(),
-            // Tab 2: Treatment Management
-            _buildTreatmentTab(),
-
-            MedicationValidationPage(),
-          ],
+          children: [_buildPatientListTab(), _buildTreatmentTab()],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => AddPatientPage()),
+            );
+          },
+          backgroundColor: Colors.blue,
+          child: const Icon(Icons.add),
+          tooltip: 'Tambah Pasien',
         ),
       ),
     );
@@ -344,11 +99,16 @@ class _PatientPageState extends State<PatientPage> {
 
   Widget _buildPatientListTab() {
     final filteredPatients =
-        _patients.where((patient) {
+        _patientData.where((patient) {
           final query = _searchController.text.toLowerCase();
-          return patient.name.toLowerCase().contains(query) ||
-              patient.nik.toLowerCase().contains(query) ||
-              patient.code!.toLowerCase().contains(query);
+          final name = patient['name'].toString().toLowerCase();
+          final nik = patient['nik'].toString().toLowerCase();
+
+          if (!name.contains(query) && !nik.contains(query)) {
+            return false;
+          }
+
+          return true;
         }).toList();
 
     return Column(
@@ -379,7 +139,7 @@ class _PatientPageState extends State<PatientPage> {
         ),
         Expanded(
           child: RefreshIndicator(
-            onRefresh: _loadData,
+            onRefresh: _fetchPatientData,
             child: ListView.builder(
               itemCount: filteredPatients.length,
               itemBuilder: (context, index) {
@@ -392,26 +152,9 @@ class _PatientPageState extends State<PatientPage> {
     );
   }
 
-  Widget _buildPatientCard(Patient patient) {
-    final treatment = _treatments.firstWhere(
-      (t) => t.patientId == patient.id,
-      orElse:
-          () => PatientTreatment(
-            id: 0,
-            patientId: 0,
-            patientName: patient.name,
-            treatmentTypeId: 0,
-            treatmentType: 'Belum ada pengobatan',
-            diagnosisDate: DateTime.now(),
-            startDate: DateTime.now(),
-            endDate: DateTime.now(),
-            medicationTime: TimeOfDay.now(),
-            status: 0,
-            currentDay: 0,
-            totalDays: 0,
-            adherenceRate: 0,
-          ),
-    );
+  Widget _buildPatientCard(Map<String, dynamic> patient) {
+    final treatment = _getActiveTreatment(patient);
+    final status = treatment?['treatment_status'] ?? 'Belum ada pengobatan';
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
@@ -421,35 +164,33 @@ class _PatientPageState extends State<PatientPage> {
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              const CircleAvatar(child: Icon(Icons.person), radius: 24),
+              CircleAvatar(child: Text(patient['name'][0]), radius: 24),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      patient.name,
+                      patient['name'],
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text('NIK: ${patient.nik} | Kode: ${patient.code}'),
+                    Text('NIK: ${patient['nik']}'),
                     const SizedBox(height: 4),
                     Row(
                       children: [
                         Icon(
                           Icons.medical_services,
                           size: 16,
-                          color: _getStatusColor(treatment.status),
+                          color: _getStatusColor(status),
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          _getTreatmentStatusText(treatment.status),
-                          style: TextStyle(
-                            color: _getStatusColor(treatment.status),
-                          ),
+                          status,
+                          style: TextStyle(color: _getStatusColor(status)),
                         ),
                       ],
                     ),
@@ -465,54 +206,44 @@ class _PatientPageState extends State<PatientPage> {
   }
 
   Widget _buildTreatmentTab() {
-    final filteredTreatments =
-        _treatments.where((treatment) {
-          if (_selectedFilter == 0) return true;
-          return treatment.status == _selectedFilter;
+    final filteredPatients =
+        _patientData.where((patient) {
+          if (_selectedFilter == 'all') return true;
+
+          final treatment = _getActiveTreatment(patient);
+          if (treatment == null) return false;
+
+          return treatment['treatment_status'].toLowerCase() == _selectedFilter;
         }).toList();
 
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(8.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<int>(
-                  value: _selectedFilter,
-                  decoration: InputDecoration(
-                    labelText: 'Filter Status',
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12),
-                  ),
-                  items: [
-                    DropdownMenuItem(value: 0, child: Text('Semua Status')),
-                    DropdownMenuItem(value: 1, child: Text('Berjalan')),
-                    DropdownMenuItem(value: 2, child: Text('Selesai')),
-                    DropdownMenuItem(value: 3, child: Text('Gagal')),
-                  ],
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedFilter = value ?? 0;
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: Icon(Icons.filter_alt),
-                onPressed: () {
-                  // Add more filter options if needed
-                },
-              ),
+          child: DropdownButtonFormField<String>(
+            value: _selectedFilter,
+            decoration: InputDecoration(
+              labelText: 'Filter Status',
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 12),
+            ),
+            items: [
+              DropdownMenuItem(value: 'all', child: Text('Semua Status')),
+              DropdownMenuItem(value: 'berjalan', child: Text('Berjalan')),
+              DropdownMenuItem(value: 'selesai', child: Text('Selesai')),
             ],
+            onChanged: (value) {
+              setState(() {
+                _selectedFilter = value ?? 'all';
+              });
+            },
           ),
         ),
         Expanded(
           child: ListView.builder(
-            itemCount: filteredTreatments.length,
+            itemCount: filteredPatients.length,
             itemBuilder: (context, index) {
-              return _buildTreatmentCard(filteredTreatments[index]);
+              return _buildTreatmentCard(filteredPatients[index]);
             },
           ),
         ),
@@ -520,27 +251,80 @@ class _PatientPageState extends State<PatientPage> {
     );
   }
 
-  Widget _buildTreatmentCard(PatientTreatment treatment) {
-    final patient = _patients.firstWhere(
-      (p) => p.id == treatment.patientId,
-      orElse:
-          () => Patient(
-            id: 0,
-            name: treatment.patientName,
-            nik: '',
-            code: '',
-            address: '',
-            phone: '',
-            subdistrictId: 0,
-            puskesmasId: 0,
-            diagnosisDate: DateTime.now(),
+  Widget _buildTreatmentCard(Map<String, dynamic> patient) {
+    final treatment = _getActiveTreatment(patient);
+
+    // Handle cases where patient has no treatments
+    if (treatment == null) {
+      return Card(
+        margin: const EdgeInsets.all(8),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                patient['name'],
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('Belum ada pengobatan'),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (context) => TreatmentManagementPage(
+                                patientId: patient['id'],
+                                patientName: patient['name'],
+                              ),
+                        ),
+                      );
+                    },
+                    child: const Text('Buat Pengobatan'),
+                  ),
+                ],
+              ),
+            ],
           ),
-    );
+        ),
+      );
+    }
+
+    // Calculate treatment progress
+    final hasDates =
+        treatment['start_date'] != null && treatment['end_date'] != null;
+    DateTime? startDate;
+    DateTime? endDate;
+    int totalDays = 0;
+    int daysPassed = 0;
+    double progress = 0.0;
+
+    if (hasDates) {
+      try {
+        startDate = DateTime.parse(treatment['start_date']);
+        endDate = DateTime.parse(treatment['end_date']);
+        final today = DateTime.now();
+        totalDays = endDate.difference(startDate).inDays;
+        daysPassed = today.difference(startDate).inDays;
+        progress = totalDays > 0 ? daysPassed / totalDays : 0;
+      } catch (e) {
+        debugPrint('Error parsing dates: $e');
+      }
+    }
 
     return Card(
       margin: const EdgeInsets.all(8),
       child: InkWell(
-        onTap: () => _showTreatmentDetail(treatment, patient),
+        onTap: () => _showTreatmentDetail(patient, treatment),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -550,7 +334,7 @@ class _PatientPageState extends State<PatientPage> {
                 children: [
                   Expanded(
                     child: Text(
-                      treatment.patientName,
+                      patient['name'],
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
@@ -559,46 +343,63 @@ class _PatientPageState extends State<PatientPage> {
                   ),
                   Chip(
                     label: Text(
-                      _getTreatmentStatusText(treatment.status),
+                      treatment['treatment_status'] ?? 'Belum Mulai',
                       style: const TextStyle(color: Colors.white),
                     ),
-                    backgroundColor: _getStatusColor(treatment.status),
+                    backgroundColor: _getStatusColor(
+                      treatment['treatment_status'],
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              Text('Regimen: ${treatment.treatmentType}'),
               Text(
-                'Periode: ${DateFormat('dd MMM yyyy').format(treatment.startDate)} - ${DateFormat('dd MMM yyyy').format(treatment.endDate)}',
+                hasDates
+                    ? 'Periode: ${DateFormat('dd MMM yyyy').format(startDate!)} - ${DateFormat('dd MMM yyyy').format(endDate!)}'
+                    : 'Jadwal pengobatan belum ditentukan',
               ),
               const SizedBox(height: 8),
-              LinearProgressIndicator(
-                value: treatment.progressPercentage,
-                backgroundColor: Colors.grey[200],
-                color: _getStatusColor(treatment.status),
-              ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Hari ${treatment.currentDay} dari ${treatment.totalDays} (${treatment.remainingDays} hari tersisa)',
-                  ),
-                  Text('${treatment.adherenceRate.toStringAsFixed(1)}%'),
-                ],
-              ),
+              if (hasDates) ...[
+                LinearProgressIndicator(
+                  value: progress.clamp(0.0, 1.0),
+                  backgroundColor: Colors.grey[200],
+                  color: _getStatusColor(treatment['treatment_status']),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Hari ${daysPassed.clamp(0, totalDays)} dari $totalDays',
+                    ),
+                    Text('${(progress * 100).toStringAsFixed(1)}%'),
+                  ],
+                ),
+              ],
               const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(
-                    onPressed: () => _showMedicationHistory(treatment),
-                    child: const Text('Riwayat Obat'),
+                  ElevatedButton(
+                    onPressed: () => _updateTreatmentStatus(patient, treatment),
+                    child: const Text('Update Status'),
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: () => _updateTreatmentStatus(treatment),
-                    child: const Text('Update Status'),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (context) => VisitManagementPage(
+                                patientId: patient['id'],
+                                patientTreatmentId: treatment['id'],
+                                patientName: patient['name'],
+                              ),
+                        ),
+                      );
+                    },
+                    child: const Text('Kunjungan'),
                   ),
                 ],
               ),
@@ -609,249 +410,217 @@ class _PatientPageState extends State<PatientPage> {
     );
   }
 
-  // Dialog and Detail Methods
-  void _showAddPatientDialog() {
-    final formKey = GlobalKey<FormState>();
-    final nameController = TextEditingController();
-    final nikController = TextEditingController();
-    final addressController = TextEditingController();
-    final phoneController = TextEditingController();
-    final heightController = TextEditingController();
-    final weightController = TextEditingController();
-    String? bloodType;
+  void _showPatientDetail(Map<String, dynamic> patient) {
+    final treatment = _getActiveTreatment(patient);
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      isDismissible: true,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Tambah Pasien Baru'),
-          content: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextFormField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Nama Lengkap*',
-                    ),
-                    validator:
-                        (value) => value!.isEmpty ? 'Harap isi nama' : null,
-                  ),
-                  TextFormField(
-                    controller: nikController,
-                    decoration: const InputDecoration(
-                      labelText: 'NIK*',
-                      hintText: '16 digit NIK',
-                    ),
-                    keyboardType: TextInputType.number,
-                    validator: (value) {
-                      if (value!.isEmpty) return 'Harap isi NIK';
-                      if (value.length != 16) return 'NIK harus 16 digit';
-                      return null;
-                    },
-                  ),
-                  TextFormField(
-                    controller: addressController,
-                    decoration: const InputDecoration(labelText: 'Alamat*'),
-                    maxLines: 2,
-                    validator:
-                        (value) => value!.isEmpty ? 'Harap isi alamat' : null,
-                  ),
-                  TextFormField(
-                    controller: phoneController,
-                    decoration: const InputDecoration(
-                      labelText: 'No. Telepon*',
-                    ),
-                    keyboardType: TextInputType.phone,
-                    validator:
-                        (value) =>
-                            value!.isEmpty ? 'Harap isi nomor telepon' : null,
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: heightController,
-                          decoration: const InputDecoration(
-                            labelText: 'Tinggi Badan (cm)',
-                          ),
-                          keyboardType: TextInputType.number,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: TextFormField(
-                          controller: weightController,
-                          decoration: const InputDecoration(
-                            labelText: 'Berat Badan (kg)',
-                          ),
-                          keyboardType: TextInputType.number,
-                        ),
-                      ),
-                    ],
-                  ),
-                  DropdownButtonFormField<String>(
-                    decoration: const InputDecoration(
-                      labelText: 'Golongan Darah',
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: 'A+', child: Text('A+')),
-                      DropdownMenuItem(value: 'A-', child: Text('A-')),
-                      DropdownMenuItem(value: 'B+', child: Text('B+')),
-                      DropdownMenuItem(value: 'B-', child: Text('B-')),
-                      DropdownMenuItem(value: 'AB+', child: Text('AB+')),
-                      DropdownMenuItem(value: 'AB-', child: Text('AB-')),
-                      DropdownMenuItem(value: 'O+', child: Text('O+')),
-                      DropdownMenuItem(value: 'O-', child: Text('O-')),
-                    ],
-                    onChanged: (value) => bloodType = value,
-                  ),
-                ],
-              ),
-            ),
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Batal'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  final newPatient = Patient(
-                    id: _patients.length + 1,
-                    name: nameController.text,
-                    nik: nikController.text,
-                    code:
-                        'P${(_patients.length + 1).toString().padLeft(3, '0')}',
-                    address: addressController.text,
-                    phone: phoneController.text,
-                    subdistrictId: 1, // Default value
-                    puskesmasId: _coordinatorId,
-                    height: int.tryParse(heightController.text),
-                    weight: int.tryParse(weightController.text),
-                    bloodType: bloodType,
-                    diagnosisDate: DateTime.now(),
-                  );
-
-                  setState(() {
-                    _patients.add(newPatient);
-                    // Add default treatment
-                    _treatments.add(
-                      PatientTreatment(
-                        id: _treatments.length + 1,
-                        patientId: newPatient.id,
-                        patientName: newPatient.name,
-                        treatmentTypeId: 1,
-                        treatmentType: 'Regimen TB Kategori 1',
-                        diagnosisDate: DateTime.now(),
-                        startDate: DateTime.now(),
-                        endDate: DateTime.now().add(const Duration(days: 180)),
-                        medicationTime: const TimeOfDay(hour: 8, minute: 0),
-                        status: 1,
-                        currentDay: 1,
-                        totalDays: 180,
-                        adherenceRate: 100.0,
-                      ),
-                    );
-                  });
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Pasien berhasil ditambahkan'),
-                    ),
-                  );
-                  Navigator.pop(context);
-                }
-              },
-              child: const Text('Simpan'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showPatientDetail(Patient patient) {
-    final treatment = _treatments.firstWhere(
-      (t) => t.patientId == patient.id,
-      orElse:
-          () => PatientTreatment(
-            id: 0,
-            patientId: 0,
-            patientName: patient.name,
-            treatmentTypeId: 0,
-            treatmentType: 'Belum ada pengobatan',
-            diagnosisDate: DateTime.now(),
-            startDate: DateTime.now(),
-            endDate: DateTime.now(),
-            medicationTime: TimeOfDay.now(),
-            status: 0,
-            currentDay: 0,
-            totalDays: 0,
-            adherenceRate: 0,
-          ),
-    );
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Detail Pasien: ${patient.name}'),
-          content: SingleChildScrollView(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildDetailRow('NIK', patient.nik),
-                _buildDetailRow('Kode Pasien', patient.code),
-                _buildDetailRow('Alamat', patient.address),
-                _buildDetailRow('No. Telepon', patient.phone),
-                if (patient.height != null)
-                  _buildDetailRow('Tinggi Badan', '${patient.height} cm'),
-                if (patient.weight != null)
-                  _buildDetailRow('Berat Badan', '${patient.weight} kg'),
-                if (patient.bloodType != null)
-                  _buildDetailRow('Golongan Darah', patient.bloodType!),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Detail Pasien',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
-                const Text(
-                  'Status Kesehatan:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                _buildDetailRow('Nama', patient['name'] ?? '-'),
+                _buildDetailRow('NIK', patient['nik'] ?? '-'),
+                _buildDetailRow('Alamat', patient['address'] ?? '-'),
+                _buildDetailRow('Telepon', patient['phone'] ?? '-'),
+                _buildDetailRow(
+                  'Jenis Kelamin',
+                  patient['gender'] == 'L' ? 'Laki-laki' : 'Perempuan',
                 ),
                 _buildDetailRow(
-                  'Tanggal Diagnosis',
-                  DateFormat('dd MMM yyyy').format(patient.diagnosisDate),
+                  'Tanggal Lahir',
+                  patient['date_of_birth'] ?? '-',
                 ),
+                _buildDetailRow('Puskesmas', patient['puskesmas'] ?? '-'),
+                _buildDetailRow('Kecamatan', patient['subdistrict'] ?? '-'),
                 _buildDetailRow(
                   'Status Pengobatan',
-                  _getTreatmentStatusText(treatment.status),
+                  treatment?['treatment_status'] ?? 'Belum ada pengobatan',
                 ),
-                _buildDetailRow(
-                  'Tingkat Kepatuhan',
-                  '${treatment.adherenceRate.toStringAsFixed(1)}%',
+
+                if (treatment != null) ...[
+                  if (treatment['start_date'] != null &&
+                      treatment['end_date'] != null)
+                    _buildDetailRow(
+                      'Periode Pengobatan',
+                      '${treatment['start_date']} - ${treatment['end_date']}',
+                    ),
+                  _buildDetailRow(
+                    'Waktu Minum Obat',
+                    treatment['medication_time']?.substring(0, 5) ?? '-',
+                  ),
+                ],
+                const SizedBox(height: 24),
+
+                // Action Buttons Section - Row 1
+                Row(
+                  children: [
+                    // Edit Button
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.edit, size: 18),
+                        label: const Text('Edit Data'),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder:
+                                  (context) =>
+                                      EditPatientPage(patientId: patient['id']),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Treatment Button
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.medical_services, size: 18),
+                        label: Text(
+                          treatment != null ? 'Pengobatan' : 'Buat Pengobatan',
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[700],
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder:
+                                  (context) => TreatmentManagementPage(
+                                    patientId: patient['id'],
+                                    patientName: patient['name'] ?? 'Pasien',
+                                    existingTreatment: treatment,
+                                  ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () => _editPatientDetails(patient),
-                  child: const Text('Edit Data Pasien'),
-                ),
+                const SizedBox(height: 8),
+
+                // Action Buttons Section - Row 2
+                if (treatment != null) ...[
+                  Row(
+                    children: [
+                      // Visit Button
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.calendar_today, size: 18),
+                          label: const Text('Kunjungan'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green[700],
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder:
+                                    (context) => VisitManagementPage(
+                                      patientId: patient['id'],
+                                      patientTreatmentId: treatment['id'],
+                                      patientName: patient['name'] ?? 'Patient',
+                                    ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+
+                      // Medication History & Validation Button
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.medication, size: 18),
+                          label: const Text('History & Validasi'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange[700],
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder:
+                                    (context) => MedicationHistoryPage(
+                                      patientId: patient['id'],
+                                      isStaff: true,
+                                    ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Tutup'),
-            ),
-          ],
         );
       },
     );
   }
 
-  void _showTreatmentDetail(PatientTreatment treatment, Patient patient) {
+  void _showTreatmentDetail(
+    Map<String, dynamic> patient,
+    Map<String, dynamic> treatment,
+  ) {
+    final hasDates =
+        treatment['start_date'] != null && treatment['end_date'] != null;
+    DateTime? startDate;
+    DateTime? endDate;
+    int totalDays = 0;
+    int daysPassed = 0;
+    double progress = 0.0;
+
+    if (hasDates) {
+      try {
+        startDate = DateTime.parse(treatment['start_date']);
+        endDate = DateTime.parse(treatment['end_date']);
+        final today = DateTime.now();
+        totalDays = endDate.difference(startDate).inDays;
+        daysPassed = today.difference(startDate).inDays;
+        progress = totalDays > 0 ? daysPassed / totalDays : 0;
+      } catch (e) {
+        debugPrint('Error parsing dates: $e');
+      }
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -875,46 +644,68 @@ class _PatientPageState extends State<PatientPage> {
                 ],
               ),
               const SizedBox(height: 16),
-              _buildDetailRow('Nama Pasien', patient.name),
-              _buildDetailRow('Regimen', treatment.treatmentType),
-              _buildDetailRow(
-                'Tanggal Diagnosis',
-                DateFormat('dd MMM yyyy').format(treatment.diagnosisDate),
-              ),
-              _buildDetailRow(
-                'Periode Pengobatan',
-                '${DateFormat('dd MMM yyyy').format(treatment.startDate)} - ${DateFormat('dd MMM yyyy').format(treatment.endDate)}',
-              ),
+              _buildDetailRow('Nama Pasien', patient['name'] ?? '-'),
+
+              if (hasDates) ...[
+                _buildDetailRow(
+                  'Tanggal Mulai',
+                  DateFormat('dd MMM yyyy').format(startDate!),
+                ),
+                _buildDetailRow(
+                  'Tanggal Selesai',
+                  DateFormat('dd MMM yyyy').format(endDate!),
+                ),
+                _buildDetailRow(
+                  'Progress',
+                  '${daysPassed.clamp(0, totalDays)} dari $totalDays hari (${(progress * 100).toStringAsFixed(1)}%)',
+                ),
+                LinearProgressIndicator(
+                  value: progress.clamp(0.0, 1.0),
+                  backgroundColor: Colors.grey[200],
+                  color: _getStatusColor(treatment['treatment_status']),
+                ),
+              ] else
+                _buildDetailRow('Status Pengobatan', 'Jadwal belum ditentukan'),
+
               _buildDetailRow(
                 'Waktu Minum Obat',
-                treatment.medicationTime.format(context),
+                treatment['medication_time']?.substring(0, 5) ?? '-',
               ),
-              _buildDetailRow(
-                'Progress',
-                '${treatment.currentDay} dari ${treatment.totalDays} hari (${treatment.progressPercentage.toStringAsFixed(1)}%)',
-              ),
-              LinearProgressIndicator(
-                value: treatment.progressPercentage,
-                backgroundColor: Colors.grey[200],
-                color: _getStatusColor(treatment.status),
-              ),
-              const SizedBox(height: 16),
               _buildDetailRow(
                 'Status',
-                _getTreatmentStatusText(treatment.status),
+                treatment['treatment_status'] ?? 'Belum dimulai',
               ),
-              _buildDetailRow(
-                'Tingkat Kepatuhan',
-                '${treatment.adherenceRate.toStringAsFixed(1)}%',
-              ),
-              if (treatment.prescription != null)
-                _buildDetailRow('Resep', treatment.prescription!),
+
+              if (treatment['visits'] != null &&
+                  treatment['visits'].isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'Jadwal Kunjungan:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                ...treatment['visits'].map<Widget>((visit) {
+                  return ListTile(
+                    leading: const Icon(Icons.calendar_today),
+                    title: Text(
+                      DateFormat(
+                        'EEEE, d MMMM yyyy',
+                        'id_ID',
+                      ).format(DateTime.parse(visit['visit_date'])),
+                    ),
+                    subtitle: Text(
+                      'Jam: ${visit['visit_time']?.substring(0, 5) ?? '-'}',
+                    ),
+                    trailing: Text(visit['visit_status'] ?? '-'),
+                  );
+                }).toList(),
+              ],
+
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () => _showMedicationHistory(treatment),
-                  child: const Text('Lihat Riwayat Minum Obat'),
+                  onPressed: () => _updateTreatmentStatus(patient, treatment),
+                  child: const Text('Update Status Pengobatan'),
                 ),
               ),
             ],
@@ -944,285 +735,11 @@ class _PatientPageState extends State<PatientPage> {
     );
   }
 
-  void _editPatientDetails(Patient patient) {
-    final formKey = GlobalKey<FormState>();
-    final addressController = TextEditingController(text: patient.address);
-    final phoneController = TextEditingController(text: patient.phone);
-    final heightController = TextEditingController(
-      text: patient.height != null ? patient.height.toString() : '',
-    );
-    final weightController = TextEditingController(
-      text: patient.weight != null ? patient.weight.toString() : '',
-    );
-    String? bloodType =
-        [
-              'A+',
-              'A-',
-              'B+',
-              'B-',
-              'AB+',
-              'AB-',
-              'O+',
-              'O-',
-            ].contains(patient.bloodType)
-            ? patient.bloodType
-            : null;
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Edit Data: ${patient.name}'),
-          content: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextFormField(
-                    controller: addressController,
-                    decoration: const InputDecoration(labelText: 'Alamat*'),
-                    validator:
-                        (value) => value!.isEmpty ? 'Harap isi alamat' : null,
-                    maxLines: 2,
-                  ),
-                  TextFormField(
-                    controller: phoneController,
-                    decoration: const InputDecoration(
-                      labelText: 'No. Telepon*',
-                    ),
-                    keyboardType: TextInputType.phone,
-                    validator:
-                        (value) =>
-                            value!.isEmpty ? 'Harap isi nomor telepon' : null,
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: heightController,
-                          decoration: const InputDecoration(
-                            labelText: 'Tinggi Badan (cm)',
-                          ),
-                          keyboardType: TextInputType.number,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: TextFormField(
-                          controller: weightController,
-                          decoration: const InputDecoration(
-                            labelText: 'Berat Badan (kg)',
-                          ),
-                          keyboardType: TextInputType.number,
-                        ),
-                      ),
-                    ],
-                  ),
-                  DropdownButtonFormField<String>(
-                    value: bloodType,
-                    decoration: const InputDecoration(
-                      labelText: 'Golongan Darah',
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: 'A+', child: Text('A+')),
-                      DropdownMenuItem(value: 'A-', child: Text('A-')),
-                      DropdownMenuItem(value: 'B+', child: Text('B+')),
-                      DropdownMenuItem(value: 'B-', child: Text('B-')),
-                      DropdownMenuItem(value: 'AB+', child: Text('AB+')),
-                      DropdownMenuItem(value: 'AB-', child: Text('AB-')),
-                      DropdownMenuItem(value: 'O+', child: Text('O+')),
-                      DropdownMenuItem(value: 'O-', child: Text('O-')),
-                    ],
-                    onChanged: (value) => bloodType = value,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Batal'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  setState(() {
-                    patient.address = addressController.text;
-                    patient.phone = phoneController.text;
-                    patient.height = int.tryParse(heightController.text);
-                    patient.weight = int.tryParse(weightController.text);
-                    patient.bloodType = bloodType;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Data berhasil diperbarui')),
-                  );
-                  Navigator.pop(context);
-                  Navigator.pop(context); // Close detail dialog too
-                }
-              },
-              child: const Text('Simpan'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showMedicationHistory(PatientTreatment treatment) {
-    final history =
-        _medicationRecords
-            .where((record) => record.patientTreatmentId == treatment.id)
-            .toList();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(16),
-          height: MediaQuery.of(context).size.height * 0.8,
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Riwayat Minum Obat - ${treatment.patientName}',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child:
-                    history.isEmpty
-                        ? const Center(
-                          child: Text('Belum ada riwayat minum obat'),
-                        )
-                        : ListView.builder(
-                          itemCount: history.length,
-                          itemBuilder: (context, index) {
-                            final record = history[index];
-                            return Card(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              child: ListTile(
-                                leading:
-                                    record.photoUrl != null
-                                        ? CachedNetworkImage(
-                                          imageUrl: record.photoUrl!,
-                                          width: 50,
-                                          height: 50,
-                                          fit: BoxFit.cover,
-                                          placeholder:
-                                              (context, url) =>
-                                                  const CircularProgressIndicator(),
-                                          errorWidget:
-                                              (context, url, error) =>
-                                                  const Icon(Icons.error),
-                                        )
-                                        : const Icon(
-                                          Icons.medical_services,
-                                          size: 40,
-                                        ),
-                                title: Text(
-                                  DateFormat(
-                                    'EEEE, d MMMM yyyy',
-                                  ).format(record.takenAt),
-                                ),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      DateFormat(
-                                        'HH:mm',
-                                      ).format(record.takenAt),
-                                    ),
-                                    Text(
-                                      record.status == 'verified'
-                                          ? 'Terverifikasi'
-                                          : record.status == 'pending'
-                                          ? 'Menunggu verifikasi'
-                                          : 'Ditolak',
-                                      style: TextStyle(
-                                        color:
-                                            record.status == 'verified'
-                                                ? Colors.green
-                                                : record.status == 'pending'
-                                                ? Colors.orange
-                                                : Colors.red,
-                                      ),
-                                    ),
-                                    if (record.notes != null)
-                                      Text(
-                                        'Catatan: ${record.notes}',
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                  ],
-                                ),
-                                trailing:
-                                    record.status == 'pending'
-                                        ? IconButton(
-                                          icon: const Icon(Icons.check),
-                                          onPressed:
-                                              () => _verifyMedication(record),
-                                          tooltip: 'Verifikasi',
-                                        )
-                                        : null,
-                              ),
-                            );
-                          },
-                        ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _verifyMedication(MedicationRecord record) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Verifikasi Minum Obat'),
-          content: const Text(
-            'Apakah Anda yakin ingin memverifikasi bukti minum obat ini?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Batal'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  record.status = 'verified';
-                  record.verifiedBy = 'Petugas'; // Replace with actual user
-                });
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Bukti minum obat telah diverifikasi'),
-                  ),
-                );
-                Navigator.pop(context);
-              },
-              child: const Text('Verifikasi'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _updateTreatmentStatus(PatientTreatment treatment) {
-    int? newStatus = treatment.status;
+  void _updateTreatmentStatus(
+    Map<String, dynamic> patient,
+    Map<String, dynamic> treatment,
+  ) {
+    String? newStatus = treatment['treatment_status'];
 
     showDialog(
       context: context,
@@ -1234,21 +751,21 @@ class _PatientPageState extends State<PatientPage> {
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RadioListTile<int>(
+                  RadioListTile<String>(
                     title: const Text('Berjalan'),
-                    value: 1,
+                    value: 'Berjalan',
                     groupValue: newStatus,
                     onChanged: (value) => setState(() => newStatus = value),
                   ),
-                  RadioListTile<int>(
+                  RadioListTile<String>(
                     title: const Text('Selesai'),
-                    value: 2,
+                    value: 'Selesai',
                     groupValue: newStatus,
                     onChanged: (value) => setState(() => newStatus = value),
                   ),
-                  RadioListTile<int>(
+                  RadioListTile<String>(
                     title: const Text('Gagal'),
-                    value: 3,
+                    value: 'Gagal',
                     groupValue: newStatus,
                     onChanged: (value) => setState(() => newStatus = value),
                   ),
@@ -1262,23 +779,26 @@ class _PatientPageState extends State<PatientPage> {
               child: const Text('Batal'),
             ),
             ElevatedButton(
-              onPressed: () {
-                if (newStatus != null && newStatus != treatment.status) {
-                  setState(() {
-                    treatment.status = newStatus!;
-                    // Update adherence rate if treatment is completed or failed
-                    if (newStatus == 2) {
-                      treatment.adherenceRate = 100.0;
-                    } else if (newStatus == 3) {
-                      treatment.adherenceRate = 0.0;
-                    }
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Status pengobatan diperbarui'),
-                    ),
+              onPressed: () async {
+                if (newStatus != null &&
+                    newStatus != treatment['treatment_status']) {
+                  // Call API to update status
+                  final success = await _updateTreatmentStatusOnServer(
+                    treatment['id'],
+                    newStatus!,
                   );
-                  Navigator.pop(context);
+
+                  if (success && mounted) {
+                    setState(() {
+                      treatment['treatment_status'] = newStatus;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Status pengobatan diperbarui'),
+                      ),
+                    );
+                    Navigator.pop(context);
+                  }
                 }
               },
               child: const Text('Simpan'),
@@ -1289,30 +809,44 @@ class _PatientPageState extends State<PatientPage> {
     );
   }
 
-  // Helper Methods
-  Color _getStatusColor(int status) {
-    switch (status) {
-      case 1: // Active
-        return Colors.blue;
-      case 2: // Completed
-        return Colors.green;
-      case 3: // Failed
-        return Colors.red;
-      default:
-        return Colors.grey;
+  Future<bool> _updateTreatmentStatusOnServer(
+    int treatmentId,
+    String newStatus,
+  ) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.put(
+        Uri.parse('${Connection.BASE_URL}/treatments/$treatmentId/status'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'status': newStatus}),
+      );
+
+      return response.statusCode == 200;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal memperbarui status: ${e.toString()}')),
+        );
+      }
+      return false;
     }
   }
 
-  String _getTreatmentStatusText(int status) {
-    switch (status) {
-      case 1:
-        return 'Berjalan';
-      case 2:
-        return 'Selesai';
-      case 3:
-        return 'Gagal';
+  Color _getStatusColor(String? status) {
+    switch (status?.toLowerCase()) {
+      case 'berjalan':
+        return Colors.blue;
+      case 'selesai':
+        return Colors.green;
+      case 'gagal':
+        return Colors.red;
       default:
-        return 'Belum dimulai';
+        return Colors.grey;
     }
   }
 }

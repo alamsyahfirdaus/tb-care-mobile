@@ -8,48 +8,320 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class MedicationHistoryPage extends StatefulWidget {
   final int patientId;
+  final bool isStaff;
 
-  const MedicationHistoryPage({Key? key, required this.patientId})
-    : super(key: key);
+  const MedicationHistoryPage({
+    Key? key,
+    required this.patientId,
+    this.isStaff = false,
+  }) : super(key: key);
 
   @override
   _MedicationHistoryPageState createState() => _MedicationHistoryPageState();
 }
 
 class _MedicationHistoryPageState extends State<MedicationHistoryPage> {
-  late Future<List<dynamic>> _recordsFuture;
+  List<dynamic> _records = [];
+  bool _isLoading = true;
+  bool _hasMore = true;
+  int _currentPage = 1;
+  final int _perPage = 10;
   String _currentFilter = 'all';
+  final ScrollController _scrollController = ScrollController();
+  final TextEditingController _noteController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _recordsFuture = _fetchRecordData();
+    _fetchRecordData();
+    _scrollController.addListener(_scrollListener);
   }
 
-  Future<List<dynamic>> _fetchRecordData() async {
+  void _scrollListener() {
+    if (_scrollController.position.pixels >=
+            _scrollController.position.maxScrollExtent - 200 &&
+        !_isLoading &&
+        _hasMore) {
+      _fetchRecordData();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchRecordData() async {
+    if (_isLoading && _currentPage > 1) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
     final session = await SharedPreferences.getInstance();
     final token = session.getString('token') ?? '';
 
     try {
       final response = await http.get(
         Uri.parse(
-          '${Connection.BASE_URL}/treatments/${widget.patientId}/history',
+          '${Connection.BASE_URL}/treatments/${widget.patientId}/history?'
+          'page=$_currentPage&per_page=$_perPage&filter=$_currentFilter',
         ),
         headers: {'Authorization': 'Bearer $token'},
       );
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> dataJson = jsonDecode(response.body);
-        return dataJson['data'] ?? [];
+        final Map<String, dynamic> data = jsonDecode(response.body);
+        final List<dynamic> newRecords = data['data'] ?? [];
+
+        setState(() {
+          _isLoading = false;
+          _records.addAll(newRecords);
+          _hasMore = newRecords.length >= _perPage;
+          _currentPage++;
+        });
       } else {
         throw Exception('Failed to load medication history');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Gagal memuat riwayat obat")),
-      );
-      return [];
+      setState(() {
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
     }
+  }
+
+  Future<void> _verifyRecord(int recordId, bool isApproved, String note) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
+
+    try {
+      final response = await http.put(
+        Uri.parse('${Connection.BASE_URL}/treatments/verify'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'id': recordId, 'notes': note}),
+      );
+
+      if (response.statusCode == 200) {
+        // Update local record
+        setState(() {
+          final index = _records.indexWhere((r) => r['id'] == recordId);
+          if (index != -1) {
+            _records[index]['is_verified'] = isApproved ? 1 : 0;
+            _records[index]['verification_note'] = note;
+          }
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                isApproved
+                    ? 'Verifikasi berhasil disetujui'
+                    : 'Verifikasi berhasil ditolak',
+              ),
+            ),
+          );
+        }
+      } else {
+        throw Exception('Failed to verify record');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+    }
+  }
+
+  void _showVerificationDialog(int recordId) {
+    _noteController.clear();
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Verifikasi Catatan'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Masukkan catatan verifikasi:'),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _noteController,
+                    decoration: const InputDecoration(
+                      hintText: 'Catatan verifikasi...',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 3,
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Batal'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (_noteController.text.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Catatan verifikasi wajib diisi'),
+                      ),
+                    );
+                    return;
+                  }
+                  Navigator.pop(context);
+                  _verifyRecord(recordId, true, _noteController.text);
+                },
+                child: const Text('Verify'),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _showDetailsDialog(Map<String, dynamic> record) {
+    final isVerified = record['is_verified'] == 1;
+    final submittedAt = DateTime.parse(record['submitted_at']);
+    final photoUrl = record['photo_url'];
+    final notes = record['notes'];
+    final verificationNote = record['verification_note'];
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Detail Kunjungan'),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Status
+                  Row(
+                    children: [
+                      Icon(
+                        isVerified ? Icons.verified : Icons.pending,
+                        size: 20,
+                        color: isVerified ? Colors.green : Colors.orange,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        isVerified ? 'Terverifikasi' : 'Menunggu Verifikasi',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color:
+                              isVerified
+                                  ? Colors.green[800]
+                                  : Colors.orange[800],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Date and Time
+                  const Text(
+                    'Waktu Pengisian:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    DateFormat(
+                      'EEEE, d MMMM yyyy - HH:mm',
+                      'id_ID',
+                    ).format(submittedAt),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(record['submitted_relative']),
+                  const SizedBox(height: 16),
+
+                  // Photo
+                  if (photoUrl != null) ...[
+                    const Text(
+                      'Bukti Foto:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      height: 200,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey[300]!),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: CachedNetworkImage(
+                          imageUrl: photoUrl,
+                          fit: BoxFit.cover,
+                          placeholder:
+                              (context, url) => const Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                          errorWidget:
+                              (context, url, error) =>
+                                  const Icon(Icons.broken_image),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Patient Notes
+                  if (notes != null && notes.isNotEmpty) ...[
+                    const Text(
+                      'Catatan Pasien:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(notes),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Verification Notes (if verified)
+                  if (verificationNote != null &&
+                      verificationNote.isNotEmpty) ...[
+                    const Text(
+                      'Catatan Verifikasi:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(verificationNote),
+                    const SizedBox(height: 16),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Tutup'),
+              ),
+            ],
+          ),
+    );
+  }
+
+  Future<void> _refreshData() async {
+    setState(() {
+      _currentPage = 1;
+      _records = [];
+      _hasMore = true;
+    });
+    await _fetchRecordData();
   }
 
   List<dynamic> _filterRecords(List<dynamic> records) {
@@ -64,6 +336,8 @@ class _MedicationHistoryPageState extends State<MedicationHistoryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final filteredRecords = _filterRecords(_records);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Riwayat Minum Obat'),
@@ -72,28 +346,39 @@ class _MedicationHistoryPageState extends State<MedicationHistoryPage> {
             icon: const Icon(Icons.filter_alt),
             onPressed: _showFilterDialog,
           ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshData),
         ],
       ),
-      body: FutureBuilder<List<dynamic>>(
-        future: _recordsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          } else if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('Belum ada riwayat minum obat'));
-          }
+      body: RefreshIndicator(
+        onRefresh: _refreshData,
+        child:
+            _records.isEmpty && _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : filteredRecords.isEmpty
+                ? const Center(child: Text('Belum ada riwayat minum obat'))
+                : ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(8),
+                  itemCount: filteredRecords.length + (_hasMore ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index >= filteredRecords.length) {
+                      return _buildLoadingIndicator();
+                    }
+                    return _buildRecordCard(filteredRecords[index]);
+                  },
+                ),
+      ),
+    );
+  }
 
-          final filteredRecords = _filterRecords(snapshot.data!);
-          return ListView.builder(
-            padding: const EdgeInsets.all(8),
-            itemCount: filteredRecords.length,
-            itemBuilder: (context, index) {
-              return _buildRecordCard(filteredRecords[index]);
-            },
-          );
-        },
+  Widget _buildLoadingIndicator() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Center(
+        child:
+            _hasMore
+                ? const CircularProgressIndicator()
+                : const Text('Tidak ada data lagi'),
       ),
     );
   }
@@ -104,140 +389,179 @@ class _MedicationHistoryPageState extends State<MedicationHistoryPage> {
     final submittedAt = DateTime.parse(record['submitted_at']);
     final photoUrl = record['photo_url'];
     final notes = record['notes'];
+    final verificationNote = record['verification_note'];
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
       elevation: 2,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Status Header
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-            decoration: BoxDecoration(
-              color: isVerified ? Colors.green[50] : Colors.orange[50],
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(4),
+      child: InkWell(
+        onTap: () => _showDetailsDialog(record),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Status Header
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              decoration: BoxDecoration(
+                color: isVerified ? Colors.green[50] : Colors.orange[50],
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(4),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isVerified ? Icons.verified : Icons.pending,
+                    size: 16,
+                    color: isVerified ? Colors.green : Colors.orange,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    isVerified ? 'Terverifikasi' : 'Menunggu Verifikasi',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color:
+                          isVerified ? Colors.green[800] : Colors.orange[800],
+                    ),
+                  ),
+                  const Spacer(),
+                  if (isLate)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red[50],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        'Terlambat',
+                        style: TextStyle(color: Colors.red, fontSize: 12),
+                      ),
+                    ),
+                ],
               ),
             ),
-            child: Row(
-              children: [
-                Icon(
-                  isVerified ? Icons.verified : Icons.pending,
-                  size: 16,
-                  color: isVerified ? Colors.green : Colors.orange,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  isVerified ? 'Terverifikasi' : 'Menunggu Verifikasi',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isVerified ? Colors.green[800] : Colors.orange[800],
-                  ),
-                ),
-                const Spacer(),
-                if (isLate)
+
+            // Photo and Details
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Photo
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
+                    width: 80,
+                    height: 80,
                     decoration: BoxDecoration(
-                      color: Colors.red[50],
-                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey[300]!),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Text(
-                      'Terlambat',
-                      style: TextStyle(color: Colors.red, fontSize: 12),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
-          // Photo and Details
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Photo
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey[300]!),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child:
-                      photoUrl != null
-                          ? ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: CachedNetworkImage(
-                              imageUrl: photoUrl,
-                              fit: BoxFit.cover,
-                              placeholder:
-                                  (context, url) => const Center(
-                                    child: CircularProgressIndicator(),
-                                  ),
-                              errorWidget:
-                                  (context, url, error) =>
-                                      const Icon(Icons.broken_image),
+                    child:
+                        photoUrl != null
+                            ? ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: CachedNetworkImage(
+                                imageUrl: photoUrl,
+                                fit: BoxFit.cover,
+                                placeholder:
+                                    (context, url) => const Center(
+                                      child: CircularProgressIndicator(),
+                                    ),
+                                errorWidget:
+                                    (context, url, error) =>
+                                        const Icon(Icons.broken_image),
+                              ),
+                            )
+                            : const Center(
+                              child: Icon(Icons.medical_services, size: 40),
                             ),
-                          )
-                          : const Center(
-                            child: Icon(Icons.medical_services, size: 40),
-                          ),
-                ),
+                  ),
 
-                const SizedBox(width: 12),
+                  const SizedBox(width: 12),
 
-                // Details
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Submission Info
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.access_time,
-                            size: 16,
+                  // Details
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Submission Info
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.access_time,
+                              size: 16,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              DateFormat(
+                                'EEEE, d MMMM yyyy - HH:mm',
+                              ).format(submittedAt),
+                              style: const TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          record['submitted_relative'],
+                          style: const TextStyle(
+                            fontSize: 12,
                             color: Colors.grey,
                           ),
-                          const SizedBox(width: 4),
+                        ),
+
+                        // Notes (if any)
+                        if (notes != null && notes.isNotEmpty) ...[
+                          const SizedBox(height: 8),
                           Text(
-                            DateFormat(
-                              'EEEE, d MMMM yyyy - HH:mm',
-                            ).format(submittedAt),
-                            style: const TextStyle(color: Colors.grey),
+                            'Catatan: ${notes.length > 30 ? '${notes.substring(0, 30)}...' : notes}',
+                            style: const TextStyle(fontSize: 12),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        record['submitted_relative'],
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
 
-                      // Notes (if any)
-                      if (notes != null && notes.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          'Catatan: $notes',
-                          style: const TextStyle(fontSize: 12),
-                        ),
+                        // Verification Note (if any)
+                        if (verificationNote != null &&
+                            verificationNote.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Verifikasi: ${verificationNote.length > 30 ? '${verificationNote.substring(0, 30)}...' : verificationNote}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isVerified ? Colors.green : Colors.red,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+
+            // Verification buttons (for staff)
+            if (widget.isStaff && record['is_verified'] == 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12, left: 12, right: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.orange),
+                      ),
+                      onPressed: () => _showVerificationDialog(record['id']),
+                      child: const Text(
+                        'Verifikasi',
+                        style: TextStyle(color: Colors.orange),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -253,37 +577,53 @@ class _MedicationHistoryPageState extends State<MedicationHistoryPage> {
             children: [
               ListTile(
                 title: const Text('Semua'),
+                trailing:
+                    _currentFilter == 'all' ? const Icon(Icons.check) : null,
                 onTap: () {
                   Navigator.pop(context);
                   setState(() {
                     _currentFilter = 'all';
+                    _refreshData();
                   });
                 },
               ),
               ListTile(
                 title: const Text('Terverifikasi'),
+                trailing:
+                    _currentFilter == 'verified'
+                        ? const Icon(Icons.check)
+                        : null,
                 onTap: () {
                   Navigator.pop(context);
                   setState(() {
                     _currentFilter = 'verified';
+                    _refreshData();
                   });
                 },
               ),
               ListTile(
                 title: const Text('Menunggu Verifikasi'),
+                trailing:
+                    _currentFilter == 'pending'
+                        ? const Icon(Icons.check)
+                        : null,
                 onTap: () {
                   Navigator.pop(context);
                   setState(() {
                     _currentFilter = 'pending';
+                    _refreshData();
                   });
                 },
               ),
               ListTile(
                 title: const Text('Terlambat'),
+                trailing:
+                    _currentFilter == 'late' ? const Icon(Icons.check) : null,
                 onTap: () {
                   Navigator.pop(context);
                   setState(() {
                     _currentFilter = 'late';
+                    _refreshData();
                   });
                 },
               ),

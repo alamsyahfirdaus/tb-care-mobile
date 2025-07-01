@@ -1,0 +1,113 @@
+Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_medicationTime == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Waktu minum obat wajib diisi')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    try {
+      final session = await SharedPreferences.getInstance();
+      final token = session.getString('token') ?? '';
+
+      final url = '${Connection.BASE_URL}/treatments/store';
+
+      final response =
+          _treatmentId != null
+              ? await http.put(
+                Uri.parse(url),
+                headers: {
+                  'Authorization': 'Bearer $token',
+                  'Content-Type': 'application/json',
+                },
+                body: jsonEncode({
+                  'id': _treatmentId,
+                  'patient_id': widget.patientId,
+                  'treatment_type_id': _treatmentTypeId,
+                  'diagnosis_date':
+                      _diagnosisDateController.text.isNotEmpty
+                          ? _diagnosisDateController.text
+                          : null,
+                  'start_date':
+                      _startDateController.text.isNotEmpty
+                          ? _startDateController.text
+                          : null,
+                  'medication_time': _medicationTimeController.text,
+                  'prescription': _prescription?.split(', ') ?? [],
+                  'treatment_status': _treatmentStatus,
+                }),
+              )
+              : await http.post(
+                Uri.parse(url),
+                headers: {
+                  'Authorization': 'Bearer $token',
+                  'Content-Type': 'application/json',
+                },
+                body: jsonEncode({
+                  'patient_id': widget.patientId,
+                  'treatment_type_id': _treatmentTypeId,
+                  'diagnosis_date':
+                      _diagnosisDateController.text.isNotEmpty
+                          ? _diagnosisDateController.text
+                          : null,
+                  'start_date':
+                      _startDateController.text.isNotEmpty
+                          ? _startDateController.text
+                          : null,
+                  'medication_time': _medicationTimeController.text,
+                  'prescription': _prescription?.split(', ') ?? [],
+                  'treatment_status': _treatmentStatus,
+                }),
+              );
+
+      final responseData = jsonDecode(response.body);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Data pengobatan berhasil disimpan')),
+          );
+          Navigator.pop(context, true);
+        }
+      } else if (response.statusCode == 422) {
+        // Handle validation errors
+        final errors = responseData['errors'] as Map<String, dynamic>;
+        String errorMessage = '';
+
+        // Build error message from all validation errors
+        errors.forEach((field, messages) {
+          if (messages is List) {
+            errorMessage += '${messages.join(', ')}\n';
+          } else {
+            errorMessage += '$messages\n';
+          }
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(errorMessage.trim())));
+        }
+      } else {
+        // Handle other errors
+        throw Exception(responseData['message'] ?? 'Failed to add patient');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
+  }
