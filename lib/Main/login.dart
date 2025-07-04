@@ -46,6 +46,8 @@ class _LoginPageState extends State<LoginPage> {
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('token', token);
+        await prefs.setString('user_name', user['name']);
+        await prefs.setString('user_id', user['id'].toString());
 
         if (mounted) {
           if (user['user_type_id'] == 2) {

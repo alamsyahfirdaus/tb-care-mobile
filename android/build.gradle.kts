@@ -1,6 +1,12 @@
+plugins {
+    // Add this line to declare the google-services plugin at the project level
+    id("com.google.gms.google-services") version "4.4.3" apply false
+    // Any other project-level plugins would go here, like the Android build tools if needed
+}
+
 allprojects {
     repositories {
-        google()
+        google() // Essential for finding Google and Firebase SDKs
         mavenCentral()
     }
 }

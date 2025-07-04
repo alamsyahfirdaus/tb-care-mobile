@@ -1,23 +1,86 @@
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:apk_tb_care/Main/Pasien/history.dart';
 import 'package:apk_tb_care/Main/Pasien/treatment_history.dart';
 import 'package:apk_tb_care/Section/screening.dart';
 import 'package:apk_tb_care/connection.dart';
-import 'package:apk_tb_care/data/medication_record.dart';
-import 'package:apk_tb_care/data/patient_treatment.dart';
 import 'package:apk_tb_care/values/colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:timezone/data/latest.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
+
+// Notification callback for alarm manager
+@pragma('vm:entry-point')
+void notificationCallback() {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  flutterLocalNotificationsPlugin.show(
+    0,
+    'Reminder Pengobatan',
+    'Saatnya minum obat! Jangan lupa ya!',
+    const NotificationDetails(
+      android: AndroidNotificationDetails(
+        'reminder_channel',
+        'Pengingat Harian',
+        channelDescription: 'Channel untuk pengingat harian seperti minum obat',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+      ),
+    ),
+  );
+}
+
+@pragma('vm:entry-point')
+void visitNotificationCallback() async {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  // Initialize with a notification click handler
+  await flutterLocalNotificationsPlugin.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+    onDidReceiveNotificationResponse: (response) {},
+  );
+
+  try {
+    await flutterLocalNotificationsPlugin.show(
+      101,
+      'Kunjungan Pengobatan',
+      'Anda memiliki jadwal kunjungan dalam 1 jam',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'visit_channel',
+          'Pengingat Kunjungan',
+          channelDescription: 'Channel untuk pengingat kunjungan pengobatan',
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          sound: RawResourceAndroidNotificationSound('notification'),
+          color: Colors.blue,
+          ledColor: Colors.blue,
+          ledOnMs: 1000,
+          ledOffMs: 500,
+        ),
+      ),
+    );
+    debugPrint('Visit notification shown successfully');
+  } catch (e) {
+    debugPrint('Error showing visit notification: $e');
+  }
+}
 
 class TreatmentPage extends StatefulWidget {
   final int patientId;
@@ -40,10 +103,58 @@ class _TreatmentPageState extends State<TreatmentPage> {
   @override
   void initState() {
     super.initState();
-    tz.initializeTimeZones();
+    _checkPermissions();
     _initNotifications();
     _patientFuture = _fetchPatientData();
     _getSharedPreferences();
+    _scheduleTestNotification();
+  }
+
+  Future<void> _checkPermissions() async {
+    final status = await Permission.notification.status;
+    if (!status.isGranted) {
+      await Permission.notification.request();
+    }
+
+    if (await Permission.scheduleExactAlarm.isDenied) {
+      await Permission.scheduleExactAlarm.request();
+    }
+  }
+
+  Future<void> _scheduleTestNotification() async {
+    try {
+      // Schedule test notification in 1 minute
+      await AndroidAlarmManager.oneShot(
+        const Duration(minutes: 1),
+        999,
+        notificationCallback,
+        exact: true,
+        wakeup: true,
+      );
+
+      log('Test notification scheduled in 1 minute');
+
+      // Show immediate test notification
+      await flutterLocalNotificationsPlugin.show(
+        998,
+        'TEST LANGSUNG',
+        'Jika ini muncul, sistem notifikasi berfungsi',
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'high_importance_channel',
+            'High Importance Notifications',
+            importance: Importance.max,
+          ),
+        ),
+      );
+    } catch (e) {
+      log('Error scheduling test notification: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+      }
+    }
   }
 
   void _getSharedPreferences() async {
@@ -51,50 +162,36 @@ class _TreatmentPageState extends State<TreatmentPage> {
     setState(() {
       _notifIsActive = prefs.getBool('notifIsActive') ?? false;
     });
-    log(prefs.getInt('hour').toString());
-  }
-
-  tz.TZDateTime _nextInstanceOf(int hour, int minute) {
-    final tz.TZDateTime now = tz.TZDateTime.now(tz.local);
-    tz.TZDateTime scheduledDate = tz.TZDateTime(
-      tz.local,
-      now.year,
-      now.month,
-      now.day,
-      hour,
-      minute,
-    );
-    if (scheduledDate.isBefore(now)) {
-      scheduledDate = scheduledDate.add(const Duration(days: 1));
-    }
-    return scheduledDate;
   }
 
   Future<void> _initNotifications() async {
-    // Initialize notification channels
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    final InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
+    await flutterLocalNotificationsPlugin.initialize(
+      const InitializationSettings(android: initializationSettingsAndroid),
+    );
 
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
-
-    // Create medication reminder channel
+    // Create channels with proper configuration
     const AndroidNotificationChannel medicationChannel =
         AndroidNotificationChannel(
           'reminder_channel',
           'Pengingat Harian',
           description: 'Channel untuk pengingat harian seperti minum obat',
           importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
+          sound: RawResourceAndroidNotificationSound('notification'),
         );
 
-    // Create visit reminder channel
     const AndroidNotificationChannel visitChannel = AndroidNotificationChannel(
       'visit_channel',
       'Pengingat Kunjungan',
       description: 'Channel untuk pengingat kunjungan pengobatan',
       importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+      sound: RawResourceAndroidNotificationSound('notification'),
     );
 
     final androidPlatform =
@@ -105,142 +202,123 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
     await androidPlatform?.createNotificationChannel(medicationChannel);
     await androidPlatform?.createNotificationChannel(visitChannel);
+
+    // Verify channels were created
+    final channels = await androidPlatform?.getNotificationChannels();
+    debugPrint('Created channels: $channels');
   }
 
   Future<void> _setNotificationStatus(bool status, int hour, int minute) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Request notification permission if not granted
+    // Request necessary permissions
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
 
-    if (await Permission.notification.isGranted) {
-      setState(() {
-        _notifIsActive = status;
-        prefs.setBool('notifIsActive', status);
-        if (_notifIsActive) {
-          _setNotificationTZ(hour, minute);
-        } else {
-          flutterLocalNotificationsPlugin.cancel(
-            0,
-          ); // Cancel medication reminders
-        }
-      });
+    if (await Permission.scheduleExactAlarm.isDenied) {
+      await Permission.scheduleExactAlarm.request();
+    }
+
+    setState(() {
+      _notifIsActive = status;
+      prefs.setBool('notifIsActive', status);
+    });
+
+    if (status) {
+      await _scheduleDailyReminder(hour, minute);
+    } else {
+      await AndroidAlarmManager.cancel(0);
     }
   }
 
-  Future<void> _setNotificationTZ(int hour, int minute) async {
-    // Check and request exact alarm permission first
-    if (await _checkExactAlarmPermission()) {
-      await flutterLocalNotificationsPlugin.zonedSchedule(
-        0,
-        'Reminder Pengobatan',
-        'Saatnya minum obat! Jangan lupa ya!',
-        _nextInstanceOf(hour, minute),
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'reminder_channel',
-            'Pengingat Harian',
-            channelDescription:
-                'Channel untuk pengingat harian seperti minum obat',
-            importance: Importance.high,
-            priority: Priority.high,
-            playSound: true,
-            enableVibration: true,
-          ),
-        ),
-        androidScheduleMode:
-            AndroidScheduleMode.inexactAllowWhileIdle, // Changed to inexact
-        matchDateTimeComponents: DateTimeComponents.time,
-      );
-    }
-  }
+  Future<void> _scheduleDailyReminder(int hour, int minute) async {
+    // Cancel any existing alarm
+    await AndroidAlarmManager.cancel(0);
 
-  Future<bool> _checkExactAlarmPermission() async {
-    if (await Permission.scheduleExactAlarm.isGranted) {
-      return true;
+    // Get current time
+    final now = DateTime.now();
+    var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
+
+    // If the time has already passed today, schedule for tomorrow
+    if (scheduledTime.isBefore(now)) {
+      scheduledTime = scheduledTime.add(const Duration(days: 1));
     }
 
-    // Request permission if not granted
-    final status = await Permission.scheduleExactAlarm.request();
-    if (status.isGranted) {
-      return true;
-    }
+    // Calculate initial delay
+    final initialDelay = scheduledTime.difference(now);
 
-    // If permission denied, show explanation and open settings
-    if (await Permission.scheduleExactAlarm.isPermanentlyDenied) {
-      await showDialog(
-        context: context,
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Permission Required'),
-              content: const Text(
-                'This app needs exact alarm permission to show timely medication reminders. '
-                'Please enable it in app settings.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => openAppSettings(),
-                  child: const Text('Open Settings'),
-                ),
-              ],
-            ),
-      );
-    }
-    return false;
+    // Schedule the daily repeating alarm
+    await AndroidAlarmManager.periodic(
+      const Duration(days: 1),
+      0,
+      notificationCallback,
+      startAt: scheduledTime,
+      exact: true,
+      wakeup: true,
+      rescheduleOnReboot: true,
+    );
+
+    log('Daily reminder scheduled at $hour:$minute');
   }
 
   Future<void> _scheduleVisitNotifications(List<dynamic> visits) async {
-    // Batalkan semua notifikasi kunjungan sebelumnya (ID dimulai dari 100)
-    await flutterLocalNotificationsPlugin.cancel(100);
-
-    for (final visit in visits) {
-      final visitDate = DateTime.parse(visit['visit_date']);
-      final visitTime = visit['visit_time'].split(':');
-      final hour = int.parse(visitTime[0]);
-      final minute = int.parse(visitTime[1]);
-
-      final scheduledDate = tz.TZDateTime(
-        tz.local,
-        visitDate.year,
-        visitDate.month,
-        visitDate.day,
-        hour,
-        minute,
-      );
-
-      // Jadwalkan 1 jam sebelum kunjungan
-      final reminderDate = scheduledDate.subtract(const Duration(hours: 1));
-
-      if (reminderDate.isAfter(tz.TZDateTime.now(tz.local))) {
-        await flutterLocalNotificationsPlugin.zonedSchedule(
-          100 + visits.indexOf(visit), // ID unik untuk setiap kunjungan
-          'Kunjungan Pengobatan',
-          'Anda memiliki jadwal kunjungan pengobatan dalam 1 jam',
-          reminderDate,
-          const NotificationDetails(
-            android: AndroidNotificationDetails(
-              'visit_channel',
-              'Pengingat Kunjungan',
-              channelDescription:
-                  'Channel untuk pengingat kunjungan pengobatan',
-              importance: Importance.high,
-              priority: Priority.high,
-            ),
-          ),
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          matchDateTimeComponents: DateTimeComponents.dateAndTime,
-        );
+    try {
+      // Cancel previous alarms
+      for (int i = 100; i < 200; i++) {
+        await AndroidAlarmManager.cancel(i);
       }
+
+      debugPrint('Scheduling ${visits.length} visit notifications');
+
+      for (final visit in visits) {
+        try {
+          final visitDate = DateTime.parse(visit['visit_date']);
+          final timeParts = visit['visit_time'].split(':');
+          final hour = int.parse(timeParts[0]);
+          final minute = int.parse(timeParts[1]);
+
+          // Convert to local time
+          final scheduledTime =
+              DateTime(
+                visitDate.year,
+                visitDate.month,
+                visitDate.day,
+                hour,
+                minute,
+              ).toLocal();
+
+          // Schedule 1 hour before
+          final reminderTime = scheduledTime.subtract(const Duration(hours: 1));
+
+          if (reminderTime.isAfter(DateTime.now())) {
+            final alarmId = 100 + visits.indexOf(visit);
+
+            debugPrint('''
+Scheduling visit:
+- ID: ${visit['id']}
+- Original: $scheduledTime (${scheduledTime.timeZoneName})
+- Reminder: $reminderTime (${reminderTime.timeZoneName})
+''');
+
+            await AndroidAlarmManager.oneShotAt(
+              reminderTime,
+              alarmId,
+              visitNotificationCallback,
+              exact: true,
+              wakeup: true,
+              rescheduleOnReboot: true,
+            );
+          }
+        } catch (e) {
+          debugPrint('Error scheduling visit ${visit['id']}: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('Error in visit scheduling: $e');
     }
   }
 
-  // Update _fetchPatientData to schedule visit notifications
   Future<Map<String, dynamic>> _fetchPatientData() async {
     final session = await SharedPreferences.getInstance();
     final token = session.getString('token') ?? '';
@@ -261,7 +339,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
           _treatments = data['data']['treatments'] ?? [];
           if (_treatments.isNotEmpty) {
             _currentTreatment = _treatments.first;
-            // Schedule visit notifications if visits exist
             if (_currentTreatment?['visits'] != null) {
               _scheduleVisitNotifications(_currentTreatment!['visits']);
             }
@@ -276,6 +353,10 @@ class _TreatmentPageState extends State<TreatmentPage> {
       return {};
     }
   }
+
+  // ... (keep all your existing build methods and helper functions unchanged)
+  // The rest of your code (build methods, helper functions, etc.) remains the same
+  // Just replace the notification scheduling parts with the alarm manager implementation
 
   @override
   Widget build(BuildContext context) {
@@ -313,27 +394,60 @@ class _TreatmentPageState extends State<TreatmentPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Status Card
                 _buildStatusCard(_currentTreatment!),
                 const SizedBox(height: 24),
-
-                // Regimen Details
                 _buildRegimenDetails(_currentTreatment!),
                 const SizedBox(height: 24),
-
-                // Medication Reminder
                 if (_currentTreatment!['medication_time'] != null)
                   _buildMedicationReminder(_currentTreatment!),
                 const SizedBox(height: 24),
-
-                // Drug
                 if (_currentTreatment!['prescription'] != null &&
                     _currentTreatment!['prescription'].isNotEmpty)
                   _buildDrugList(_currentTreatment!['prescription']),
                 const SizedBox(height: 24),
-
-                // Screening Section
                 _buildScreeningSection(),
+                // Add this to your build method
+                Column(
+                  children: [
+                    ElevatedButton(
+                      onPressed: () async {
+                        // Test immediate visit notification
+                        await flutterLocalNotificationsPlugin.show(
+                          101,
+                          'TEST Kunjungan',
+                          'Ini tes notifikasi kunjungan langsung',
+                          const NotificationDetails(
+                            android: AndroidNotificationDetails(
+                              'visit_channel',
+                              'Pengingat Kunjungan',
+                              importance: Importance.high,
+                              playSound: true,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('Test Visit Notif Langsung'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () async {
+                        // Test scheduled visit notification in 1 minute
+                        final testTime = DateTime.now().add(
+                          const Duration(minutes: 1),
+                        );
+                        await AndroidAlarmManager.oneShotAt(
+                          testTime,
+                          102,
+                          visitNotificationCallback,
+                          exact: true,
+                        );
+                        debugPrint(
+                          'Scheduled test visit notification for $testTime',
+                        );
+                      },
+                      child: const Text('Test Visit Notif 1 Menit Lagi'),
+                    ),
+                  ],
+                ),
               ],
             ),
           );
@@ -342,6 +456,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
     );
   }
 
+  // ... (keep all your existing helper widget methods)
   Widget _buildScreeningSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -413,7 +528,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   Widget _buildStatusCard(Map<String, dynamic> treatmentData) {
-    // Hitung progress jika data tersedia
     final currentDay = _calculateCurrentDay(
       treatmentData['start_date'],
       treatmentData['end_date'],
@@ -623,7 +737,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   Widget _buildMedicationReminder(Map<String, dynamic> treatment) {
-    // Default medication time if not provided
     final medicationTime = TimeOfDay(hour: 8, minute: 0);
 
     return Card(
@@ -769,9 +882,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
   void _toggleReminder(bool value, int hour, int minute) async {
     try {
-      setState(() {
-        _setNotificationStatus(value, hour, minute);
-      });
+      await _setNotificationStatus(value, hour, minute);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("Pengingat ${value ? 'diaktifkan' : 'dinonaktifkan'}"),
@@ -849,12 +960,10 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
     final request = http.MultipartRequest('POST', url);
 
-    // Tambahkan token kalau pakai auth
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token') ?? '';
     request.headers['Authorization'] = 'Bearer $token';
 
-    // Tambahkan form field dan file
     request.fields['patient_treatment_id'] = patientTreatmentId;
     request.files.add(
       await http.MultipartFile.fromPath('photo', imageFile.path),
