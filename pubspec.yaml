@@ -26,6 +26,7 @@ dependencies:
   android_alarm_manager_plus: ^4.0.7
   firebase_database: ^11.3.9
   firebase_core: ^3.15.1
+  open_file: ^3.5.10
 
 dev_dependencies:
   flutter_test:

@@ -39,50 +39,117 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
     super.initState();
     _loadInitialData();
     _setupRealtimeListeners();
+
+    log(_replies.toString());
   }
 
   Future<void> _loadInitialData() async {
     try {
-      log("TEST");
-      // Load both consultation and replies in parallel
-      final results = await Future.wait([
-        widget.service.loadConsultation(widget.consultationId),
-        widget.service.loadReplies(widget.consultationId),
-      ]);
+      log("Loading consultation: ${widget.consultationId}");
+
+      final consultation = await widget.service.loadConsultation(
+        widget.consultationId,
+      );
+      final replies = await widget.service.loadReplies(widget.consultationId);
 
       if (mounted) {
         setState(() {
-          _consultation = results[0] as Map<String, dynamic>;
-          _replies = results[1] as List<dynamic>;
+          _consultation = _convertToMapStringDynamic(consultation);
+          _replies = _sortReplies(
+            replies.map(_convertToMapStringDynamic).toList(),
+          );
         });
         _scrollToBottom();
       }
-    } catch (e) {
+    } catch (e, stack) {
+      log("Error loading data", error: e, stackTrace: stack);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load data: ${e.toString()}')),
+          SnackBar(content: Text('Failed to load: ${e.toString()}')),
         );
+        await _loadDirectFromFirebase();
       }
     }
   }
 
-  void _setupRealtimeListeners() {
-    // Setup consultation listener
-    widget.service.setupConsultationListener(widget.consultationId, (
-      consultation,
-    ) {
-      if (mounted) {
-        setState(() => _consultation = consultation);
-      }
+  List<dynamic> _sortReplies(List<dynamic> replies) {
+    return replies..sort((a, b) {
+      final dateA = DateTime.parse(a['created_at'] ?? '1970-01-01');
+      final dateB = DateTime.parse(b['created_at'] ?? '1970-01-01');
+      return dateA.compareTo(dateB); // Urutan dari yang terlama ke terbaru
     });
+  }
 
-    // Setup replies listener
-    widget.service.setupReplyListener(widget.consultationId, (replies) {
+  Map<String, dynamic> _convertToMapStringDynamic(dynamic data) {
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    if (data is Map<dynamic, dynamic>) {
+      return data.map(
+        (key, value) => MapEntry(
+          key.toString(),
+          value is Map ? _convertToMapStringDynamic(value) : value,
+        ),
+      );
+    }
+    return {};
+  }
+
+  Future<void> _loadDirectFromFirebase() async {
+    try {
+      final consultationSnapshot =
+          await widget.service.consultationsRef
+              .child(widget.consultationId)
+              .get();
+
+      final repliesSnapshot =
+          await widget.service.repliesRef.child(widget.consultationId).get();
+
       if (mounted) {
         setState(() {
-          _replies = replies;
-          _scrollToBottom();
+          _consultation = _convertToMapStringDynamic(
+            consultationSnapshot.value,
+          );
+
+          if (repliesSnapshot.exists) {
+            final repliesData = repliesSnapshot.value as Map<dynamic, dynamic>?;
+            _replies =
+                repliesData?.values.map(_convertToMapStringDynamic).toList() ??
+                [];
+          }
         });
+      }
+    } catch (e) {
+      log("Direct Firebase load failed: $e");
+    }
+  }
+
+  void _setupRealtimeListeners() {
+    widget.service.consultationsRef.child(widget.consultationId).onValue.listen(
+      (event) {
+        if (mounted) {
+          setState(() {
+            _consultation = _convertToMapStringDynamic(event.snapshot.value);
+          });
+        }
+      },
+    );
+
+    widget.service.repliesRef.child(widget.consultationId).onValue.listen((
+      event,
+    ) {
+      if (mounted) {
+        final data = event.snapshot.value;
+        if (data != null) {
+          setState(() {
+            _replies = _sortReplies(
+              (data as Map<dynamic, dynamic>).values
+                  .map(_convertToMapStringDynamic)
+                  .toList(),
+            );
+            _scrollToBottom();
+          });
+        }
       }
     });
   }
@@ -131,6 +198,7 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _buildMessageTile(_consultation!, isConsultation: true),
                   const SizedBox(height: 16),

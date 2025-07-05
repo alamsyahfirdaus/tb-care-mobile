@@ -30,6 +30,7 @@ class _NewConsultationPageState extends State<NewConsultationPage> {
   String? _selectedRecipientId;
   bool _isSubmitting = false;
   bool _isLoadingRecipients = false;
+  List<Map<String, dynamic>> _recipients = [];
 
   @override
   void initState() {
@@ -38,10 +39,13 @@ class _NewConsultationPageState extends State<NewConsultationPage> {
   }
 
   Future<void> _loadRecipientsIfNeeded() async {
-    if (widget.service.recipients.isEmpty) {
+    if (_recipients.isEmpty) {
       setState(() => _isLoadingRecipients = true);
       try {
-        await widget.service.loadRecipients();
+        final recipients = await widget.service.loadRecipients();
+        setState(() {
+          _recipients = recipients;
+        });
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -126,7 +130,7 @@ class _NewConsultationPageState extends State<NewConsultationPage> {
       );
 
       if (mounted) {
-        Navigator.pop(context);
+        Navigator.pop(context, true); // Return true to indicate success
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Konsultasi berhasil dikirim')),
         );
@@ -159,8 +163,8 @@ class _NewConsultationPageState extends State<NewConsultationPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.info_outline),
-            onPressed: () {
-              showDialog(
+            onPressed: () async {
+              await showDialog(
                 context: context,
                 builder:
                     (context) => AlertDialog(
@@ -269,14 +273,12 @@ class _NewConsultationPageState extends State<NewConsultationPage> {
                               ),
                               value: _selectedRecipientId,
                               items:
-                                  widget.service.recipients
-                                      .map(
-                                        (recipient) => DropdownMenuItem<String>(
-                                          value: recipient['id'].toString(),
-                                          child: Text(recipient['name']),
-                                        ),
-                                      )
-                                      .toList(),
+                                  _recipients.map((recipient) {
+                                    return DropdownMenuItem<String>(
+                                      value: recipient['id'].toString(),
+                                      child: Text(recipient['name']),
+                                    );
+                                  }).toList(),
                               onChanged: (value) {
                                 setState(() => _selectedRecipientId = value);
                               },

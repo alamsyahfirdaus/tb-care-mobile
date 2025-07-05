@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:open_file/open_file.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:http_parser/http_parser.dart';
@@ -40,6 +41,8 @@ class ConsultationService {
         databaseURL: _databaseUrl,
       ).ref('replies'),
       _notificationsPlugin = FlutterLocalNotificationsPlugin() {
+    FirebaseDatabase.instance.setPersistenceEnabled(true);
+    FirebaseDatabase.instance.setPersistenceCacheSizeBytes(10000000);
     _initializeNotifications();
   }
 
@@ -175,7 +178,7 @@ class ConsultationService {
     }
   }
 
-  Future<void> loadRecipients() async {
+  Future<List<Map<String, dynamic>>> loadRecipients() async {
     final session = await SharedPreferences.getInstance();
     final token = session.getString('token') ?? '';
 
@@ -187,8 +190,20 @@ class ConsultationService {
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = jsonDecode(response.body);
+        dynamic recipientsData = data['data'];
+
+        // Handle both List and Map cases
+        List<dynamic> recipientsList;
+        if (recipientsData is List) {
+          recipientsList = recipientsData;
+        } else if (recipientsData is Map) {
+          recipientsList = recipientsData.values.toList();
+        } else {
+          recipientsList = [];
+        }
+
         recipients =
-            (data['data'] as List)
+            recipientsList
                 .map(
                   (item) => {
                     'id': item['id'],
@@ -198,6 +213,7 @@ class ConsultationService {
                   },
                 )
                 .toList();
+        return recipients;
       } else {
         throw Exception('Failed to load recipients');
       }
@@ -388,19 +404,39 @@ class ConsultationService {
   ) async {
     final session = await SharedPreferences.getInstance();
     final token = session.getString('token') ?? '';
-    final userId = session.getString('user_id');
+    final userId = session.getString('user_id') ?? ''; // Ensure non-null string
     final userName = session.getString('user_name') ?? 'Pengguna';
 
+    // 1. Generate temporary ID for optimistic update
+    final tempReplyId = DateTime.now().millisecondsSinceEpoch.toString();
+
+    // 2. Create initial reply data (using client timestamp first)
+    final newReply = {
+      'id': tempReplyId,
+      'consultation_id': consultationId,
+      'message': message,
+      'sender_id': userId,
+      'sender_name': userName,
+      'attachment': null,
+      'created_at': DateTime.now().toIso8601String(), // Client timestamp first
+      'is_read': false,
+      'status': 'sending',
+    };
+
+    // 3. Optimistic update to Firebase
+    await _repliesRef.child(consultationId).child(tempReplyId).set(newReply);
+
     try {
+      // 4. Prepare request
       var request = http.MultipartRequest(
         'POST',
         Uri.parse('${Connection.BASE_URL}/consultations/reply'),
       );
-
       request.headers['Authorization'] = 'Bearer $token';
       request.fields['consultation_id'] = consultationId;
       request.fields['message'] = message;
 
+      // 5. Handle attachment
       if (attachment != null) {
         request.files.add(
           await http.MultipartFile.fromPath(
@@ -412,34 +448,64 @@ class ConsultationService {
         );
       }
 
-      final response = await request.send();
+      // 6. Send request
+      final response = await _retryRequest(request);
       final responseBody = await response.stream.bytesToString();
       final responseData = jsonDecode(responseBody);
 
       if (response.statusCode == 201) {
-        final newReply = {
-          'id': responseData['data']['id'],
-          'consultation_id': consultationId,
-          'message': message,
-          'sender_id': userId,
-          'sender_name': userName,
+        // 7. Update with server data
+        final serverId = responseData['data']['id'].toString();
+        final updatedReply = {
+          ...newReply,
+          'id': serverId,
+          'status': 'delivered',
+          'created_at':
+              responseData['data']['created_at'] ?? newReply['created_at'],
           'attachment':
               attachment != null
                   ? '${Connection.BASE_URL}/storage/${responseData['data']['attachment']}'
                   : null,
-          'created_at': DateTime.now().toIso8601String(),
-          'is_read': false,
         };
 
+        // 8. Replace temporary reply with server version
+        await _repliesRef.child(consultationId).child(tempReplyId).remove();
         await _repliesRef
             .child(consultationId)
-            .child(responseData['data']['id'].toString())
-            .set(newReply);
+            .child(serverId)
+            .set(updatedReply);
       }
     } catch (e) {
+      // 9. Mark as failed if error occurs
+      await _repliesRef.child(consultationId).child(tempReplyId).update({
+        'status': 'failed',
+        'error': e.toString(),
+      });
+
       debugPrint('Error sending reply: $e');
       rethrow;
     }
+  }
+
+  Future<http.StreamedResponse> _retryRequest(
+    http.MultipartRequest request, {
+    int maxRetries = 3,
+  }) async {
+    int attempt = 0;
+    while (attempt < maxRetries) {
+      try {
+        final response = await request.send();
+        if (response.statusCode < 500) {
+          return response;
+        }
+        throw Exception('Server error: ${response.statusCode}');
+      } catch (e) {
+        attempt++;
+        if (attempt == maxRetries) rethrow;
+        await Future.delayed(Duration(seconds: attempt));
+      }
+    }
+    throw Exception('Max retries exceeded');
   }
 
   Future<void> deleteConsultation(String id) async {
@@ -557,36 +623,105 @@ class ConsultationService {
 
   Future<void> _downloadFile(String url, BuildContext context) async {
     try {
+      // Check if URL is valid
+      final uri = Uri.parse(url);
+      if (!uri.isAbsolute) {
+        throw Exception('Invalid URL');
+      }
+
+      // Handle permissions
       if (Platform.isAndroid) {
-        if (await Permission.storage.isDenied) {
+        // Request storage permissions
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
           await Permission.storage.request();
+          throw Exception('Storage permission denied');
         }
 
+        // For Android 10+, we need manage external storage for some cases
         if (await Permission.manageExternalStorage.isDenied) {
           await Permission.manageExternalStorage.request();
         }
-
-        if (!await Permission.manageExternalStorage.isGranted) {
-          throw Exception('Izin penyimpanan diperlukan');
-        }
       }
 
+      // Get download directory
       final dir =
           Platform.isAndroid
               ? await getExternalStorageDirectory()
               : await getApplicationDocumentsDirectory();
 
+      if (dir == null) {
+        throw Exception('Could not access download directory');
+      }
+
+      // Create download directory if it doesn't exist
+      final downloadDir = Directory('${dir.path}/Downloads');
+      if (!await downloadDir.exists()) {
+        await downloadDir.create(recursive: true);
+      }
+
+      // Get file name from URL
       final fileName = url.split('/').last;
-      final savePath = '${dir!.path}/$fileName';
+      final savePath = '${downloadDir.path}/$fileName';
 
-      await Dio().download(url, savePath);
+      // Show download progress
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(width: 10),
+              Text('Downloading $fileName...'),
+            ],
+          ),
+          duration: const Duration(minutes: 1),
+        ),
+      );
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('File diunduh ke $savePath')));
+      // Download file
+      await Dio().download(
+        url,
+        savePath,
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            final progress = (received / total * 100).toStringAsFixed(0);
+            debugPrint('Download progress: $progress%');
+          }
+        },
+      );
+
+      // Show completion message
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('File downloaded to Downloads/$fileName'),
+          action: SnackBarAction(
+            label: 'Open',
+            onPressed: () => _openFile(savePath, context),
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Download failed: ${e.toString()}'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openFile(String path, BuildContext context) async {
+    try {
+      final result = await OpenFile.open(path);
+
+      if (result.type != ResultType.done) {
+        throw Exception('Failed to open file: ${result.message}');
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal mengunduh: ${e.toString()}')),
+        SnackBar(content: Text('Cannot open file: ${e.toString()}')),
       );
     }
   }

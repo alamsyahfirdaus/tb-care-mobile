@@ -65,22 +65,40 @@ class _ConsultationPageState extends State<ConsultationPage> {
   }
 
   Map<String, dynamic> _formatConsultation(dynamic consultation) {
-    // Convert replies to proper format
-    final replies = consultation['replies'] as List? ?? [];
-    final repliesMap = <String, dynamic>{};
+    // Handle replies whether they come as List or Map
+    dynamic repliesData = consultation['replies'];
+    final Map<String, dynamic> repliesMap = {};
 
-    for (var reply in replies) {
-      if (reply is Map) {
-        repliesMap[reply['id'].toString()] = {
-          'id': reply['id'],
-          'message': reply['message'],
-          'attachment': reply['attachment'],
-          'is_read': reply['is_read'] ?? 0,
-          'created_at': reply['created_at'],
-          'user_id': reply['user_id'],
-          'sender_name': reply['sender_name'],
-        };
+    if (repliesData is List) {
+      // Handle API response format (List)
+      for (var reply in repliesData) {
+        if (reply is Map) {
+          repliesMap[reply['id'].toString()] = {
+            'id': reply['id'],
+            'message': reply['message'],
+            'attachment': reply['attachment'],
+            'is_read': reply['is_read'] ?? 0,
+            'created_at': reply['created_at'],
+            'user_id': reply['user_id'],
+            'sender_name': reply['sender_name'],
+          };
+        }
       }
+    } else if (repliesData is Map) {
+      // Handle Firebase format (Map)
+      repliesData.forEach((key, reply) {
+        if (reply is Map) {
+          repliesMap[key.toString()] = {
+            'id': reply['id'] ?? key,
+            'message': reply['message'],
+            'attachment': reply['attachment'],
+            'is_read': reply['is_read'] ?? 0,
+            'created_at': reply['created_at'],
+            'user_id': reply['user_id'],
+            'sender_name': reply['sender_name'],
+          };
+        }
+      });
     }
 
     return {
@@ -118,26 +136,30 @@ class _ConsultationPageState extends State<ConsultationPage> {
 
   Future<void> _syncWithFirebase(List<dynamic> consultations) async {
     try {
-      final futures = consultations.map((consultation) {
-        final id = consultation['id'].toString();
-        print('SYNCING ID: $id');
+      final futures =
+          consultations.map((consultation) async {
+            final id = consultation['id'].toString();
+            print('SYNCING ID: $id');
 
-        final formatted = _formatConsultation(consultation);
+            final formatted = _formatConsultation(consultation);
 
-        return _service.consultationsRef
-            .child(id)
-            .set(formatted)
-            .timeout(const Duration(seconds: 5))
-            .then((_) {
-              print('SYNCED ID: $id');
-            });
-      });
+            // Sync consultation
+            await _service.consultationsRef.child(id).set(formatted);
+
+            // Sync replies separately under the replies node
+            final replies = formatted['replies'] as Map<String, dynamic>;
+            if (replies.isNotEmpty) {
+              await _service.repliesRef.child(id).set(replies);
+            }
+
+            print('SYNCED ID: $id');
+          }).toList();
 
       await Future.wait(futures);
-
       print('✅ Sync done');
     } catch (e) {
       debugPrint('❌ Firebase sync error: $e');
+      rethrow;
     }
   }
 
@@ -264,7 +286,11 @@ class _ConsultationPageState extends State<ConsultationPage> {
 
   Widget _buildConsultationCard(Map<String, dynamic> consultation) {
     final isOwned = consultation['user_id'] == _currentUserId;
-    final hasReplies = (consultation['replies'] as List?)?.isNotEmpty ?? false;
+    final replies =
+        consultation['replies'] is Map
+            ? consultation['replies'] as Map<String, dynamic>
+            : <String, dynamic>{};
+    final hasReplies = replies.isNotEmpty;
     final isPublic = consultation['recipient_id'] == null;
 
     return Card(
@@ -314,7 +340,7 @@ class _ConsultationPageState extends State<ConsultationPage> {
               if (hasReplies) ...[
                 const SizedBox(height: 8),
                 Text(
-                  '${consultation['replies']?.length ?? 0} balasan',
+                  '${replies.length} balasan',
                   style: TextStyle(color: Colors.blue[600], fontSize: 12),
                 ),
               ],
