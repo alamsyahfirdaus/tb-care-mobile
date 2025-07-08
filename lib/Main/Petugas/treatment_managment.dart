@@ -11,12 +11,14 @@ class TreatmentManagementPage extends StatefulWidget {
   final int patientId;
   final String patientName;
   final Map<String, dynamic>? existingTreatment;
+  final VoidCallback? onShowHistory; // Callback for history button
 
   const TreatmentManagementPage({
     super.key,
     required this.patientId,
     required this.patientName,
     this.existingTreatment,
+    this.onShowHistory,
   });
 
   @override
@@ -49,7 +51,6 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
     super.initState();
     _initializeFormData();
     _fetchTreatmentTypes();
-    log(_treatmentTypeId.toString());
   }
 
   void _initializeFormData() {
@@ -162,10 +163,7 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
       final session = await SharedPreferences.getInstance();
       final token = session.getString('token') ?? '';
 
-      final url =
-          _treatmentId != null
-              ? '${Connection.BASE_URL}/treatments/update' // Update endpoint
-              : '${Connection.BASE_URL}/treatments/store'; // Create endpoint
+      final url = '${Connection.BASE_URL}/treatments/store';
 
       final requestBody = {
         if (_treatmentId != null) 'id': _treatmentId,
@@ -175,29 +173,22 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
           'diagnosis_date': _diagnosisDateController.text,
         if (_startDateController.text.isNotEmpty)
           'start_date': _startDateController.text,
-        'medication_time': _medicationTimeController.text,
+        'medication_time': DateFormat('HH:mm').format(
+          DateTime(0, 0, 0, _medicationTime!.hour, _medicationTime!.minute),
+        ),
         'prescription': _prescription?.split(', ') ?? [],
         'treatment_status': _treatmentStatus,
       };
 
-      final response =
-          _treatmentId != null
-              ? await http.put(
-                Uri.parse(url),
-                headers: {
-                  'Authorization': 'Bearer $token',
-                  'Content-Type': 'application/json',
-                },
-                body: jsonEncode(requestBody),
-              )
-              : await http.post(
-                Uri.parse(url),
-                headers: {
-                  'Authorization': 'Bearer $token',
-                  'Content-Type': 'application/json',
-                },
-                body: jsonEncode(requestBody),
-              );
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode(requestBody),
+      );
 
       final responseData = jsonDecode(response.body);
 
@@ -210,12 +201,12 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                     ? 'Data pengobatan berhasil diperbarui'
                     : 'Data pengobatan berhasil disimpan',
               ),
+              backgroundColor: Colors.green,
             ),
           );
           Navigator.pop(context, true);
         }
       } else if (response.statusCode == 422) {
-        // Handle validation errors
         final errors = responseData['errors'] as Map<String, dynamic>;
         String errorMessage = '';
 
@@ -228,18 +219,24 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
         });
 
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(errorMessage.trim())));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage.trim()),
+              backgroundColor: Colors.red,
+            ),
+          );
         }
       } else {
         throw Exception(responseData['message'] ?? 'Failed to save treatment');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } finally {
       if (mounted) {
@@ -259,6 +256,14 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
               ? 'Edit Pengobatan - ${widget.patientName}'
               : 'Tambah Pengobatan - ${widget.patientName}',
         ),
+        actions: [
+          if (widget.onShowHistory != null)
+            IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'Riwayat Pengobatan',
+              onPressed: widget.onShowHistory,
+            ),
+        ],
       ),
       body:
           _isLoading
@@ -273,10 +278,13 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                       // Treatment Type Dropdown
                       DropdownButtonFormField<int>(
                         value: _treatmentTypeId,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Jenis Pengobatan*',
-                          border: OutlineInputBorder(),
-                          hintText: 'Pilih jenis pengobatan',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[50],
                         ),
                         items:
                             _treatmentTypes.map((type) {
@@ -312,7 +320,6 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                         onChanged: (value) {
                           setState(() {
                             _treatmentTypeId = value;
-                            // Show description when an item is selected
                             final selectedType = _treatmentTypes.firstWhere(
                               (type) => type['id'] == value,
                               orElse: () => {},
@@ -343,10 +350,14 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                       // Diagnosis Date
                       TextFormField(
                         controller: _diagnosisDateController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Tanggal Diagnosis',
-                          suffixIcon: Icon(Icons.calendar_today),
-                          border: OutlineInputBorder(),
+                          suffixIcon: const Icon(Icons.calendar_today),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[50],
                         ),
                         readOnly: true,
                         onTap: () => _selectDate(context, true),
@@ -356,10 +367,14 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                       // Start Date
                       TextFormField(
                         controller: _startDateController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Tanggal Mulai Pengobatan',
-                          suffixIcon: Icon(Icons.calendar_today),
-                          border: OutlineInputBorder(),
+                          suffixIcon: const Icon(Icons.calendar_today),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[50],
                         ),
                         readOnly: true,
                         onTap: () => _selectDate(context, false),
@@ -382,10 +397,14 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                       // Medication Time
                       TextFormField(
                         controller: _medicationTimeController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Waktu Minum Obat*',
-                          suffixIcon: Icon(Icons.access_time),
-                          border: OutlineInputBorder(),
+                          suffixIcon: const Icon(Icons.access_time),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[50],
                         ),
                         readOnly: true,
                         onTap: () => _selectTime(context),
@@ -401,9 +420,13 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                       // Prescription
                       TextFormField(
                         initialValue: _prescription,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Resep Obat (pisahkan dengan koma)',
-                          border: OutlineInputBorder(),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[50],
                         ),
                         maxLines: 3,
                         onChanged: (value) => _prescription = value,
@@ -413,9 +436,13 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                       // Treatment Status
                       DropdownButtonFormField<String>(
                         value: _treatmentStatus,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Status Pengobatan*',
-                          border: OutlineInputBorder(),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          filled: true,
+                          fillColor: Colors.grey[50],
                         ),
                         items: const [
                           DropdownMenuItem(
@@ -454,16 +481,29 @@ class _TreatmentManagementPageState extends State<TreatmentManagementPage> {
                           onPressed: _isSubmitting ? null : _submitForm,
                           style: ElevatedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            backgroundColor: Theme.of(context).primaryColor,
                           ),
                           child:
                               _isSubmitting
-                                  ? const CircularProgressIndicator(
-                                    color: Colors.white,
+                                  ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
                                   )
                                   : Text(
                                     _treatmentId != null
                                         ? 'PERBARUI PENGATURAN PENGOBATAN'
                                         : 'SIMPAN PENGATURAN PENGOBATAN',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                         ),
                       ),

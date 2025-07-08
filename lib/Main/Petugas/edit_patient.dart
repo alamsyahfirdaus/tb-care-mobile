@@ -184,10 +184,11 @@ class _EditPatientPageState extends State<EditPatientPage> {
     _formKey.currentState!.save();
 
     try {
+      log(widget.patientId.toString());
       final session = await SharedPreferences.getInstance();
       final token = session.getString('token') ?? '';
 
-      final response = await http.put(
+      final response = await http.post(
         Uri.parse('${Connection.BASE_URL}/patients/store'),
         headers: {
           'Authorization': 'Bearer $token',
@@ -195,7 +196,7 @@ class _EditPatientPageState extends State<EditPatientPage> {
           'Accept': 'application/json',
         },
         body: jsonEncode({
-          'id': widget.patientId,
+          'patient_id': widget.patientId.toString(),
           'nik': _nik,
           'name': _name,
           'email': _email,

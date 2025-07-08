@@ -205,7 +205,7 @@ class _MedicationHistoryPageState extends State<MedicationHistoryPage> {
       context: context,
       builder:
           (context) => AlertDialog(
-            title: const Text('Detail Kunjungan'),
+            title: const Text('Detail Obat'),
             content: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

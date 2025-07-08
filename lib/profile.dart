@@ -247,27 +247,6 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_userData['user_type_id'] == 2) // Patient features
-              Column(
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.medical_services),
-                    title: const Text('Riwayat Pengobatan'),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () {
-                      // Navigate to treatment history
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.medication),
-                    title: const Text('Pengingat Minum Obat'),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () {
-                      // Navigate to medication reminders
-                    },
-                  ),
-                ],
-              ),
             ListTile(
               leading: const Icon(Icons.logout, color: Colors.red),
               title: const Text('Keluar', style: TextStyle(color: Colors.red)),

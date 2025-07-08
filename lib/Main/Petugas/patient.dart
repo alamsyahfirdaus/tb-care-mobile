@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:apk_tb_care/Main/Pasien/history.dart';
+import 'package:apk_tb_care/Main/Pasien/treatment_history.dart';
 import 'package:apk_tb_care/Main/Petugas/add_patient.dart';
 import 'package:apk_tb_care/Main/Petugas/edit_patient.dart';
 import 'package:apk_tb_care/Main/Petugas/treatment_managment.dart';
@@ -514,12 +515,35 @@ class _PatientPageState extends State<PatientPage> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder:
-                                  (context) => TreatmentManagementPage(
+                              builder: (context) {
+                                if (patient['treatment_status'] == 'Berjalan') {
+                                  return TreatmentManagementPage(
                                     patientId: patient['id'],
                                     patientName: patient['name'] ?? 'Pasien',
                                     existingTreatment: treatment,
-                                  ),
+                                    onShowHistory: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder:
+                                              (context) => TreatmentHistoryPage(
+                                                patientId: patient['id'],
+                                                patientName:
+                                                    patient['name'] ?? 'Pasien',
+                                              ),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                } else {
+                                  return TreatmentHistoryPage(
+                                    patientId: patient['id'],
+                                    patientName: patient['name'] ?? 'Pasien',
+                                    isStaff: true,
+                                    isDone: true,
+                                  );
+                                }
+                              },
                             ),
                           );
                         },
@@ -817,13 +841,13 @@ class _PatientPageState extends State<PatientPage> {
     final token = session.getString('token') ?? '';
 
     try {
-      final response = await http.put(
-        Uri.parse('${Connection.BASE_URL}/treatments/$treatmentId/status'),
+      final response = await http.post(
+        Uri.parse('${Connection.BASE_URL}/treatments/status'),
         headers: {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'status': newStatus}),
+        body: jsonEncode({'id': treatmentId, 'treatment_status': newStatus}),
       );
 
       return response.statusCode == 200;

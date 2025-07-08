@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:apk_tb_care/Main/Petugas/treatment_managment.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
@@ -8,8 +9,17 @@ import 'package:apk_tb_care/connection.dart';
 
 class TreatmentHistoryPage extends StatefulWidget {
   final int patientId;
+  final String patientName;
+  bool? isStaff;
+  bool? isDone;
 
-  const TreatmentHistoryPage({super.key, required this.patientId});
+  TreatmentHistoryPage({
+    super.key,
+    required this.patientId,
+    required this.patientName,
+    this.isStaff = false,
+    this.isDone = false,
+  });
 
   @override
   State<TreatmentHistoryPage> createState() => _TreatmentHistoryPageState();
@@ -90,6 +100,42 @@ class _TreatmentHistoryPageState extends State<TreatmentHistoryPage> {
           );
         },
       ),
+      floatingActionButton:
+          (widget.isStaff == true && widget.isDone == true)
+              ? FloatingActionButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) {
+                        return TreatmentManagementPage(
+                          patientId: widget.patientId,
+                          patientName: widget.patientName,
+                          onShowHistory: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder:
+                                    (context) => TreatmentHistoryPage(
+                                      patientId: widget.patientId,
+                                      patientName: widget.patientName,
+                                      isStaff: widget.isStaff,
+                                      isDone: widget.isDone,
+                                    ),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  );
+                },
+                backgroundColor: Colors.blue,
+                child: const Icon(Icons.add),
+                tooltip: 'Tambah Pasien',
+              )
+              : null,
     );
   }
 

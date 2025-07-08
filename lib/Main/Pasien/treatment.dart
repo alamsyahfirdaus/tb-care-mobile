@@ -572,6 +572,7 @@ Scheduling visit:
                           builder:
                               (builder) => TreatmentHistoryPage(
                                 patientId: widget.patientId,
+                                patientName: _patientData['name'] ?? 'Pasien',
                               ),
                         ),
                       ),

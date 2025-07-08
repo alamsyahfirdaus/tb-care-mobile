@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:apk_tb_care/Main/Pasien/consultation.dart';
 import 'package:apk_tb_care/Main/Pasien/education.dart';
-import 'package:apk_tb_care/Main/Petugas/education.dart';
 import 'package:apk_tb_care/Main/Petugas/patient.dart';
 import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/profile.dart';
