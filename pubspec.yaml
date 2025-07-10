@@ -27,6 +27,7 @@ dependencies:
   firebase_database: ^11.3.9
   firebase_core: ^3.15.1
   open_file: ^3.5.10
+  workmanager: ^0.8.0
 
 dev_dependencies:
   flutter_test:

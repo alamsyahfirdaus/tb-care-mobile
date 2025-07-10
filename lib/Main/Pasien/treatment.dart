@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:apk_tb_care/Main/Pasien/history.dart';
@@ -16,29 +15,81 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
+import 'package:workmanager/workmanager.dart';
 
 // Notification callback for alarm manager
 @pragma('vm:entry-point')
-void notificationCallback() {
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+void notificationCallback() async {
+  try {
+    // Simpan waktu notifikasi terakhir
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setInt('lastNotificationTime', DateTime.now().millisecondsSinceEpoch);
 
-  flutterLocalNotificationsPlugin.show(
-    0,
-    'Reminder Pengobatan',
-    'Saatnya minum obat! Jangan lupa ya!',
-    const NotificationDetails(
-      android: AndroidNotificationDetails(
-        'reminder_channel',
-        'Pengingat Harian',
-        channelDescription: 'Channel untuk pengingat harian seperti minum obat',
-        importance: Importance.high,
-        priority: Priority.high,
-        playSound: true,
-        enableVibration: true,
+    final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+        FlutterLocalNotificationsPlugin();
+
+    // Pastikan inisialisasi
+    await flutterLocalNotificationsPlugin.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
-    ),
-  );
+    );
+
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      'Reminder Pengobatan',
+      'Saatnya minum obat! Jangan lupa ya!',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'reminder_channel',
+          'Pengingat Harian',
+          channelDescription:
+              'Channel untuk pengingat harian seperti minum obat',
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          sound: RawResourceAndroidNotificationSound('notification'),
+          color: Colors.green,
+          ledColor: Colors.green,
+          ledOnMs: 1000,
+          ledOffMs: 500,
+        ),
+      ),
+    );
+    log('Daily notification shown at ${DateTime.now()}');
+  } catch (e) {
+    log('Error showing notification: $e');
+  }
+}
+
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    final notifications = FlutterLocalNotificationsPlugin();
+    await notifications.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      ),
+    );
+
+    await notifications.show(
+      0,
+      'Reminder Pengobatan (Backup)',
+      'Saatnya minum obat! Jangan lupa ya!',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'reminder_channel_backup',
+          'Pengingat Harian Backup',
+          channelDescription: 'Channel backup untuk pengingat harian',
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+        ),
+      ),
+    );
+    return true;
+  });
 }
 
 @pragma('vm:entry-point')
@@ -46,15 +97,46 @@ void visitNotificationCallback() async {
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  // Initialize with a notification click handler
-  await flutterLocalNotificationsPlugin.initialize(
-    const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    ),
-    onDidReceiveNotificationResponse: (response) {},
-  );
-
   try {
+    // Initialize notifications plugin
+    await flutterLocalNotificationsPlugin.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      ),
+      onDidReceiveNotificationResponse: (response) {},
+    );
+
+    // Show the visit notification
+    await flutterLocalNotificationsPlugin.show(
+      101, // ID unik untuk notifikasi kunjungan
+      'Kunjungan Pengobatan',
+      'Anda memiliki jadwal kunjungan dalam 1 jam',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'visit_channel', // ID channel
+          'Pengingat Kunjungan', // Nama channel
+          channelDescription: 'Channel untuk pengingat kunjungan pengobatan',
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          sound: RawResourceAndroidNotificationSound(
+            'notification',
+          ), // Pastikan nama file sesuai
+          color: Colors.blue,
+          ledColor: Colors.blue,
+          ledOnMs: 1000,
+          ledOffMs: 500,
+          // Tambahkan ini untuk Android 8.0+
+          channelShowBadge: true,
+          timeoutAfter: 3600000, // 1 jam
+        ),
+      ),
+    );
+    debugPrint('Visit notification shown successfully at ${DateTime.now()}');
+  } catch (e) {
+    debugPrint('Error showing visit notification: $e');
+    // Fallback tanpa sound jika error
     await flutterLocalNotificationsPlugin.show(
       101,
       'Kunjungan Pengobatan',
@@ -66,19 +148,9 @@ void visitNotificationCallback() async {
           channelDescription: 'Channel untuk pengingat kunjungan pengobatan',
           importance: Importance.high,
           priority: Priority.high,
-          playSound: true,
-          enableVibration: true,
-          sound: RawResourceAndroidNotificationSound('notification'),
-          color: Colors.blue,
-          ledColor: Colors.blue,
-          ledOnMs: 1000,
-          ledOffMs: 500,
         ),
       ),
     );
-    debugPrint('Visit notification shown successfully');
-  } catch (e) {
-    debugPrint('Error showing visit notification: $e');
   }
 }
 
@@ -105,9 +177,54 @@ class _TreatmentPageState extends State<TreatmentPage> {
     super.initState();
     _checkPermissions();
     _initNotifications();
+    _checkMissedNotifications();
     _patientFuture = _fetchPatientData();
     _getSharedPreferences();
-    _scheduleTestNotification();
+  }
+
+  Future<void> _checkMissedNotifications() async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastNotificationTime = prefs.getInt('lastNotificationTime');
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (lastNotificationTime != null) {
+      final diffHours = (now - lastNotificationTime) / (1000 * 60 * 60);
+      if (diffHours > 26) {
+        // Jika lebih dari 26 jam sejak notifikasi terakhir
+        _showMissedNotificationWarning();
+      }
+    }
+
+    // Simpan waktu pengecekan terakhir
+    prefs.setInt('lastNotificationTime', now);
+  }
+
+  void _showMissedNotificationWarning() {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Pengingat Terlewat'),
+            content: const Text(
+              'Sepertinya Anda melewatkan waktu minum obat. Apakah Anda sudah minum obat?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Nanti'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _showUploadDialog();
+                },
+                child: const Text('Sudah Minum'),
+              ),
+            ],
+          ),
+    );
   }
 
   Future<void> _checkPermissions() async {
@@ -121,39 +238,34 @@ class _TreatmentPageState extends State<TreatmentPage> {
     }
   }
 
-  Future<void> _scheduleTestNotification() async {
+  Future<void> _scheduleWorkManagerBackup(int hour, int minute) async {
     try {
-      // Schedule test notification in 1 minute
-      await AndroidAlarmManager.oneShot(
-        const Duration(minutes: 1),
-        999,
-        notificationCallback,
-        exact: true,
-        wakeup: true,
-      );
+      await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
 
-      log('Test notification scheduled in 1 minute');
+      // Hitung delay awal
+      final now = DateTime.now().toLocal();
+      var scheduledTime =
+          DateTime(now.year, now.month, now.day, hour, minute).toLocal();
+      if (scheduledTime.isBefore(now)) {
+        scheduledTime = scheduledTime.add(const Duration(days: 1));
+      }
+      final initialDelay = scheduledTime.difference(now);
 
-      // Show immediate test notification
-      await flutterLocalNotificationsPlugin.show(
-        998,
-        'TEST LANGSUNG',
-        'Jika ini muncul, sistem notifikasi berfungsi',
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'high_importance_channel',
-            'High Importance Notifications',
-            importance: Importance.max,
-          ),
+      await Workmanager().registerPeriodicTask(
+        'medicationReminderBackup',
+        'medicationReminderTask',
+        frequency: const Duration(hours: 24),
+        initialDelay: initialDelay,
+        constraints: Constraints(
+          networkType: NetworkType.notRequired,
+          requiresBatteryNotLow: false,
+          requiresCharging: false,
         ),
       );
+
+      log('Backup reminder scheduled with WorkManager');
     } catch (e) {
-      log('Error scheduling test notification: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
-      }
+      log('Error scheduling WorkManager backup: $e');
     }
   }
 
@@ -227,56 +339,107 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
     if (status) {
       await _scheduleDailyReminder(hour, minute);
+      await _scheduleWorkManagerBackup(hour, minute); // Tambahkan backup
     } else {
       await AndroidAlarmManager.cancel(0);
+      await Workmanager().cancelByTag('medicationReminderBackup');
     }
   }
 
   Future<void> _scheduleDailyReminder(int hour, int minute) async {
-    // Cancel any existing alarm
-    await AndroidAlarmManager.cancel(0);
+    try {
+      // 1. Pastikan izin exact alarm
+      if (await Permission.scheduleExactAlarm.isDenied) {
+        final status = await Permission.scheduleExactAlarm.request();
+        if (!status.isGranted) {
+          log('Izin exact alarm tidak diberikan');
+          return;
+        }
+      }
 
-    // Get current time
-    final now = DateTime.now();
-    var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
+      // 2. Batalkan alarm yang ada
+      await AndroidAlarmManager.cancel(0);
 
-    // If the time has already passed today, schedule for tomorrow
-    if (scheduledTime.isBefore(now)) {
-      scheduledTime = scheduledTime.add(const Duration(days: 1));
+      // 3. Hitung waktu penjadwalan dengan benar (local time)
+      final now = DateTime.now().toLocal();
+      var scheduledTime =
+          DateTime(now.year, now.month, now.day, hour, minute).toLocal();
+
+      // Jika waktu sudah lewat hari ini, jadwalkan untuk besok
+      if (scheduledTime.isBefore(now)) {
+        scheduledTime = scheduledTime.add(const Duration(days: 1));
+      }
+
+      // 4. Logging untuk debugging
+      log('''
+Menjadwalkan pengingat harian:
+- Waktu sekarang: ${now.toIso8601String()} (${now.timeZoneName})
+- Waktu terjadwal: ${scheduledTime.toIso8601String()} (${scheduledTime.timeZoneName})
+- Delay awal: ${scheduledTime.difference(now)}
+''');
+
+      // 5. Jadwalkan dengan exact alarm dan wakeup
+      await AndroidAlarmManager.periodic(
+        const Duration(days: 1),
+        0, // ID alarm
+        notificationCallback,
+        startAt: scheduledTime,
+        exact: true,
+        wakeup: true,
+        rescheduleOnReboot: true,
+        allowWhileIdle: true, // Penting untuk Doze mode
+      );
+
+      log(
+        'Pengingat harian berhasil dijadwalkan pukul $hour:$minute waktu lokal',
+      );
+    } catch (e) {
+      log('Gagal menjadwalkan pengingat harian: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal menjadwalkan pengingat: ${e.toString()}'),
+          ),
+        );
+      }
     }
-
-    // Calculate initial delay
-    final initialDelay = scheduledTime.difference(now);
-
-    // Schedule the daily repeating alarm
-    await AndroidAlarmManager.periodic(
-      const Duration(days: 1),
-      0,
-      notificationCallback,
-      startAt: scheduledTime,
-      exact: true,
-      wakeup: true,
-      rescheduleOnReboot: true,
-    );
-
-    log('Daily reminder scheduled at $hour:$minute');
   }
 
   Future<void> _scheduleVisitNotifications(List<dynamic> visits) async {
     try {
+      debugPrint(
+        '[START] Scheduling visit notifications - Total visits: ${visits.length}',
+      );
+
       // Cancel previous alarms
       for (int i = 100; i < 200; i++) {
-        await AndroidAlarmManager.cancel(i);
+        try {
+          await AndroidAlarmManager.cancel(i);
+          debugPrint('Cancelled alarm with id: $i');
+        } catch (e) {
+          debugPrint('Error cancelling alarm $i: $e');
+        }
       }
 
-      debugPrint('Scheduling ${visits.length} visit notifications');
+      if (visits.isEmpty) {
+        debugPrint('No visits to schedule');
+        return;
+      }
 
       for (final visit in visits) {
         try {
+          debugPrint('\nProcessing visit ID: ${visit['id']}');
+          debugPrint('Visit data: $visit');
+
+          // Parse visit date and time
           final visitDate = DateTime.parse(visit['visit_date']);
-          final timeParts = visit['visit_time'].split(':');
+          final timeParts = (visit['visit_time'] as String).split(':');
           final hour = int.parse(timeParts[0]);
           final minute = int.parse(timeParts[1]);
+
+          debugPrint(
+            'Original visit time: $hour:$minute on ${visitDate.toIso8601String()}',
+          );
 
           // Convert to local time
           final scheduledTime =
@@ -288,17 +451,23 @@ class _TreatmentPageState extends State<TreatmentPage> {
                 minute,
               ).toLocal();
 
+          debugPrint(
+            'Local scheduled time: ${scheduledTime.toIso8601String()} (${scheduledTime.timeZoneName})',
+          );
+
           // Schedule 1 hour before
           final reminderTime = scheduledTime.subtract(const Duration(hours: 1));
+          debugPrint('Reminder time: ${reminderTime.toIso8601String()}');
 
           if (reminderTime.isAfter(DateTime.now())) {
             final alarmId = 100 + visits.indexOf(visit);
-
             debugPrint('''
-Scheduling visit:
-- ID: ${visit['id']}
-- Original: $scheduledTime (${scheduledTime.timeZoneName})
-- Reminder: $reminderTime (${reminderTime.timeZoneName})
+[VALID] Scheduling visit notification:
+- Visit ID: ${visit['id']}
+- Original Time: ${visit['visit_date']} ${visit['visit_time']}
+- Scheduled Time: ${scheduledTime.toIso8601String()}
+- Reminder Time: ${reminderTime.toIso8601String()}
+- Alarm ID: $alarmId
 ''');
 
             await AndroidAlarmManager.oneShotAt(
@@ -309,13 +478,33 @@ Scheduling visit:
               wakeup: true,
               rescheduleOnReboot: true,
             );
+
+            debugPrint(
+              'Successfully scheduled visit notification for ID: ${visit['id']}',
+            );
+          } else {
+            debugPrint('''
+[SKIPPED] Visit reminder time has passed:
+- Reminder Time: ${reminderTime.toIso8601String()}
+- Current Time: ${DateTime.now().toIso8601String()}
+''');
           }
         } catch (e) {
-          debugPrint('Error scheduling visit ${visit['id']}: $e');
+          debugPrint('''
+[ERROR] Failed to schedule visit ${visit['id']}:
+Error: $e
+StackTrace: ${StackTrace.current}
+''');
         }
       }
     } catch (e) {
-      debugPrint('Error in visit scheduling: $e');
+      debugPrint('''
+[CRITICAL ERROR] In visit scheduling process:
+Error: $e
+StackTrace: ${StackTrace.current}
+''');
+    } finally {
+      debugPrint('[END] Visit notifications scheduling completed');
     }
   }
 
@@ -353,10 +542,6 @@ Scheduling visit:
       return {};
     }
   }
-
-  // ... (keep all your existing build methods and helper functions unchanged)
-  // The rest of your code (build methods, helper functions, etc.) remains the same
-  // Just replace the notification scheduling parts with the alarm manager implementation
 
   @override
   Widget build(BuildContext context) {
@@ -406,48 +591,8 @@ Scheduling visit:
                   _buildDrugList(_currentTreatment!['prescription']),
                 const SizedBox(height: 24),
                 _buildScreeningSection(),
+
                 // Add this to your build method
-                Column(
-                  children: [
-                    ElevatedButton(
-                      onPressed: () async {
-                        // Test immediate visit notification
-                        await flutterLocalNotificationsPlugin.show(
-                          101,
-                          'TEST Kunjungan',
-                          'Ini tes notifikasi kunjungan langsung',
-                          const NotificationDetails(
-                            android: AndroidNotificationDetails(
-                              'visit_channel',
-                              'Pengingat Kunjungan',
-                              importance: Importance.high,
-                              playSound: true,
-                            ),
-                          ),
-                        );
-                      },
-                      child: const Text('Test Visit Notif Langsung'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () async {
-                        // Test scheduled visit notification in 1 minute
-                        final testTime = DateTime.now().add(
-                          const Duration(minutes: 1),
-                        );
-                        await AndroidAlarmManager.oneShotAt(
-                          testTime,
-                          102,
-                          visitNotificationCallback,
-                          exact: true,
-                        );
-                        debugPrint(
-                          'Scheduled test visit notification for $testTime',
-                        );
-                      },
-                      child: const Text('Test Visit Notif 1 Menit Lagi'),
-                    ),
-                  ],
-                ),
               ],
             ),
           );
@@ -871,10 +1016,6 @@ Scheduling visit:
 
   String _formatDate(DateTime date) {
     return DateFormat('dd MMMM yyyy').format(date);
-  }
-
-  String _formatTime(TimeOfDay time) {
-    return '${time.hour}:${time.minute.toString().padLeft(2, '0')}';
   }
 
   String _getNextMedicationTime(TimeOfDay medicationTime) {

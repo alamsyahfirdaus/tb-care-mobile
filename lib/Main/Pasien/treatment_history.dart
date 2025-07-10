@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:apk_tb_care/connection.dart';
 
+// ignore: must_be_immutable
 class TreatmentHistoryPage extends StatefulWidget {
   final int patientId;
   final String patientName;
