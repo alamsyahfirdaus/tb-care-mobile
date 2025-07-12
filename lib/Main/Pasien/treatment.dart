@@ -73,22 +73,41 @@ void callbackDispatcher() {
       ),
     );
 
-    await notifications.show(
-      0,
-      'Reminder Pengobatan (Backup)',
-      'Saatnya minum obat! Jangan lupa ya!',
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'reminder_channel_backup',
-          'Pengingat Harian Backup',
-          channelDescription: 'Channel backup untuk pengingat harian',
-          importance: Importance.high,
-          priority: Priority.high,
-          playSound: true,
-        ),
-      ),
-    );
-    return true;
+    switch (task) {
+      case 'daily_medication':
+        await notifications.show(
+          0,
+          'Reminder Pengobatan',
+          'Saatnya minum obat! Jangan lupa ya!',
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'reminder_channel',
+              'Pengingat Harian',
+              importance: Importance.high,
+              priority: Priority.high,
+            ),
+          ),
+        );
+        // Don't try to reschedule here - it's handled by the periodic task
+        break;
+
+      case 'visit_reminder':
+        await notifications.show(
+          101,
+          inputData?['title'] ?? 'Kunjungan Pengobatan',
+          inputData?['message'] ?? 'Anda memiliki jadwal kunjungan',
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'visit_channel',
+              'Pengingat Kunjungan',
+              importance: Importance.high,
+            ),
+          ),
+        );
+        break;
+    }
+
+    return Future.value(true);
   });
 }
 
@@ -120,9 +139,6 @@ void visitNotificationCallback() async {
           priority: Priority.high,
           playSound: true,
           enableVibration: true,
-          sound: RawResourceAndroidNotificationSound(
-            'notification',
-          ), // Pastikan nama file sesuai
           color: Colors.blue,
           ledColor: Colors.blue,
           ledOnMs: 1000,
@@ -348,163 +364,98 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
   Future<void> _scheduleDailyReminder(int hour, int minute) async {
     try {
-      // 1. Pastikan izin exact alarm
-      if (await Permission.scheduleExactAlarm.isDenied) {
-        final status = await Permission.scheduleExactAlarm.request();
-        if (!status.isGranted) {
-          log('Izin exact alarm tidak diberikan');
-          return;
-        }
-      }
+      // Gunakan WorkManager sebagai primary scheduler
+      await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
 
-      // 2. Batalkan alarm yang ada
-      await AndroidAlarmManager.cancel(0);
+      // Batalkan task sebelumnya
+      await Workmanager().cancelByTag('daily_medication_reminder');
 
-      // 3. Hitung waktu penjadwalan dengan benar (local time)
+      // Hitung waktu penjadwalan
       final now = DateTime.now().toLocal();
       var scheduledTime =
           DateTime(now.year, now.month, now.day, hour, minute).toLocal();
-
-      // Jika waktu sudah lewat hari ini, jadwalkan untuk besok
       if (scheduledTime.isBefore(now)) {
         scheduledTime = scheduledTime.add(const Duration(days: 1));
       }
+      final initialDelay = scheduledTime.difference(now);
 
-      // 4. Logging untuk debugging
-      log('''
-Menjadwalkan pengingat harian:
-- Waktu sekarang: ${now.toIso8601String()} (${now.timeZoneName})
-- Waktu terjadwal: ${scheduledTime.toIso8601String()} (${scheduledTime.timeZoneName})
-- Delay awal: ${scheduledTime.difference(now)}
-''');
-
-      // 5. Jadwalkan dengan exact alarm dan wakeup
-      await AndroidAlarmManager.periodic(
-        const Duration(days: 1),
-        0, // ID alarm
-        notificationCallback,
-        startAt: scheduledTime,
-        exact: true,
-        wakeup: true,
-        rescheduleOnReboot: true,
-        allowWhileIdle: true, // Penting untuk Doze mode
+      // Jadwalkan dengan WorkManager
+      await Workmanager().registerOneOffTask(
+        'daily_medication_reminder',
+        'daily_medication',
+        initialDelay: initialDelay,
+        constraints: Constraints(
+          networkType: NetworkType.notRequired,
+          requiresBatteryNotLow: false,
+        ),
+        existingWorkPolicy: ExistingWorkPolicy.replace,
       );
 
-      log(
-        'Pengingat harian berhasil dijadwalkan pukul $hour:$minute waktu lokal',
+      // Sebagai cadangan, tetap jadwalkan dengan AlarmManager
+      try {
+        await AndroidAlarmManager.oneShotAt(
+          scheduledTime,
+          0,
+          notificationCallback,
+          exact: true,
+          wakeup: true,
+          allowWhileIdle: true,
+        );
+      } catch (e) {
+        debugPrint('AlarmManager backup failed: $e');
+      }
+
+      debugPrint(
+        'Daily reminder scheduled at ${scheduledTime.toIso8601String()}',
       );
     } catch (e) {
-      log('Gagal menjadwalkan pengingat harian: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Gagal menjadwalkan pengingat: ${e.toString()}'),
-          ),
-        );
-      }
+      debugPrint('Error scheduling daily reminder: $e');
     }
   }
 
   Future<void> _scheduleVisitNotifications(List<dynamic> visits) async {
-    try {
-      debugPrint(
-        '[START] Scheduling visit notifications - Total visits: ${visits.length}',
-      );
+    await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
 
-      // Cancel previous alarms
-      for (int i = 100; i < 200; i++) {
-        try {
-          await AndroidAlarmManager.cancel(i);
-          debugPrint('Cancelled alarm with id: $i');
-        } catch (e) {
-          debugPrint('Error cancelling alarm $i: $e');
-        }
+    for (final visit in visits) {
+      try {
+        final visitDate = DateTime.parse(visit['visit_date']);
+        final timeParts = visit['visit_time'].split(':');
+        final hour = int.parse(timeParts[0]);
+        final minute = int.parse(timeParts[1]);
+
+        final scheduledTime =
+            DateTime(
+              visitDate.year,
+              visitDate.month,
+              visitDate.day,
+              hour,
+              minute,
+            ).toLocal();
+
+        final reminderTime = scheduledTime.subtract(const Duration(hours: 1));
+        final initialDelay = reminderTime.difference(DateTime.now());
+
+        if (initialDelay.isNegative) continue;
+
+        await Workmanager().registerOneOffTask(
+          'visit_${visit['id']}',
+          'visit_reminder',
+          inputData: {
+            'visit_id': visit['id'],
+            'title': 'Kunjungan Pengobatan',
+            'message': 'Anda memiliki jadwal kunjungan dalam 1 jam',
+          },
+          initialDelay: initialDelay,
+          constraints: Constraints(networkType: NetworkType.notRequired),
+          existingWorkPolicy: ExistingWorkPolicy.replace,
+        );
+
+        debugPrint(
+          'Scheduled visit reminder for ${visit['id']} at ${reminderTime.toIso8601String()}',
+        );
+      } catch (e) {
+        debugPrint('Error scheduling visit ${visit['id']}: $e');
       }
-
-      if (visits.isEmpty) {
-        debugPrint('No visits to schedule');
-        return;
-      }
-
-      for (final visit in visits) {
-        try {
-          debugPrint('\nProcessing visit ID: ${visit['id']}');
-          debugPrint('Visit data: $visit');
-
-          // Parse visit date and time
-          final visitDate = DateTime.parse(visit['visit_date']);
-          final timeParts = (visit['visit_time'] as String).split(':');
-          final hour = int.parse(timeParts[0]);
-          final minute = int.parse(timeParts[1]);
-
-          debugPrint(
-            'Original visit time: $hour:$minute on ${visitDate.toIso8601String()}',
-          );
-
-          // Convert to local time
-          final scheduledTime =
-              DateTime(
-                visitDate.year,
-                visitDate.month,
-                visitDate.day,
-                hour,
-                minute,
-              ).toLocal();
-
-          debugPrint(
-            'Local scheduled time: ${scheduledTime.toIso8601String()} (${scheduledTime.timeZoneName})',
-          );
-
-          // Schedule 1 hour before
-          final reminderTime = scheduledTime.subtract(const Duration(hours: 1));
-          debugPrint('Reminder time: ${reminderTime.toIso8601String()}');
-
-          if (reminderTime.isAfter(DateTime.now())) {
-            final alarmId = 100 + visits.indexOf(visit);
-            debugPrint('''
-[VALID] Scheduling visit notification:
-- Visit ID: ${visit['id']}
-- Original Time: ${visit['visit_date']} ${visit['visit_time']}
-- Scheduled Time: ${scheduledTime.toIso8601String()}
-- Reminder Time: ${reminderTime.toIso8601String()}
-- Alarm ID: $alarmId
-''');
-
-            await AndroidAlarmManager.oneShotAt(
-              reminderTime,
-              alarmId,
-              visitNotificationCallback,
-              exact: true,
-              wakeup: true,
-              rescheduleOnReboot: true,
-            );
-
-            debugPrint(
-              'Successfully scheduled visit notification for ID: ${visit['id']}',
-            );
-          } else {
-            debugPrint('''
-[SKIPPED] Visit reminder time has passed:
-- Reminder Time: ${reminderTime.toIso8601String()}
-- Current Time: ${DateTime.now().toIso8601String()}
-''');
-          }
-        } catch (e) {
-          debugPrint('''
-[ERROR] Failed to schedule visit ${visit['id']}:
-Error: $e
-StackTrace: ${StackTrace.current}
-''');
-        }
-      }
-    } catch (e) {
-      debugPrint('''
-[CRITICAL ERROR] In visit scheduling process:
-Error: $e
-StackTrace: ${StackTrace.current}
-''');
-    } finally {
-      debugPrint('[END] Visit notifications scheduling completed');
     }
   }
 
@@ -883,7 +834,12 @@ StackTrace: ${StackTrace.current}
   }
 
   Widget _buildMedicationReminder(Map<String, dynamic> treatment) {
-    final medicationTime = TimeOfDay(hour: 8, minute: 0);
+    final timeString = treatment['medication_time'] as String; // e.g. "08:30"
+    final timeParts = timeString.split(':');
+    final medicationTime = TimeOfDay(
+      hour: int.parse(timeParts[0]),
+      minute: int.parse(timeParts[1]),
+    );
 
     return Card(
       elevation: 2,
