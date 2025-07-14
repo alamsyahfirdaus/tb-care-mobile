@@ -8,6 +8,7 @@ import 'package:apk_tb_care/Main/Pasien/treatment_history.dart';
 import 'package:apk_tb_care/Section/screening.dart';
 import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/values/colors.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
@@ -49,7 +50,9 @@ void notificationCallback() async {
           priority: Priority.high,
           playSound: true,
           enableVibration: true,
-          sound: RawResourceAndroidNotificationSound('notification'),
+          sound: UriAndroidNotificationSound(
+            'content://settings/system/notification_sound',
+          ),
           color: Colors.green,
           ledColor: Colors.green,
           ledOnMs: 1000,
@@ -84,6 +87,9 @@ void callbackDispatcher() {
               'reminder_channel',
               'Pengingat Harian',
               importance: Importance.high,
+              sound: UriAndroidNotificationSound(
+                'content://settings/system/notification_sound',
+              ),
               priority: Priority.high,
             ),
           ),
@@ -138,6 +144,9 @@ void visitNotificationCallback() async {
           importance: Importance.high,
           priority: Priority.high,
           playSound: true,
+          sound: UriAndroidNotificationSound(
+            'content://settings/system/notification_sound',
+          ),
           enableVibration: true,
           color: Colors.blue,
           ledColor: Colors.blue,
@@ -191,11 +200,28 @@ class _TreatmentPageState extends State<TreatmentPage> {
   @override
   void initState() {
     super.initState();
-    _checkPermissions();
-    _initNotifications();
-    _checkMissedNotifications();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeBackgroundTasks();
+    });
     _patientFuture = _fetchPatientData();
+  }
+
+  Future<void> _initializeBackgroundTasks() async {
+    await _checkPermissions();
+    await _disableBatteryOptimization();
+    await _initNotifications();
+    _checkMissedNotifications();
     _getSharedPreferences();
+  }
+
+  Future<void> _disableBatteryOptimization() async {
+    try {
+      if (await Permission.ignoreBatteryOptimizations.isDenied) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (e) {
+      debugPrint('Error disabling battery optimization: $e');
+    }
   }
 
   Future<void> _checkMissedNotifications() async {
@@ -354,12 +380,25 @@ class _TreatmentPageState extends State<TreatmentPage> {
     });
 
     if (status) {
-      await _scheduleDailyReminder(hour, minute);
+      if (await _canScheduleExactAlarms()) {
+        await _scheduleDailyReminder(hour, minute);
+      }
       await _scheduleWorkManagerBackup(hour, minute); // Tambahkan backup
     } else {
       await AndroidAlarmManager.cancel(0);
       await Workmanager().cancelByTag('medicationReminderBackup');
     }
+  }
+
+  Future<bool> _canScheduleExactAlarms() async {
+    if (Platform.isAndroid) {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      if (androidInfo.version.sdkInt >= 31) {
+        // Android 12+
+        return await Permission.scheduleExactAlarm.isGranted;
+      }
+    }
+    return true;
   }
 
   Future<void> _scheduleDailyReminder(int hour, int minute) async {

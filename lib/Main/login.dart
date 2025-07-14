@@ -8,7 +8,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
 import 'package:url_launcher/url_launcher.dart';
 
 class LoginPage extends StatefulWidget {
@@ -24,6 +23,29 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController passwordController = TextEditingController();
   bool _obscureText = true;
   bool _isLoading = false;
+  bool _rememberMe = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+  }
+
+  // Memuat kredensial yang tersimpan
+  Future<void> _loadSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUsername = prefs.getString('saved_username');
+    final savedPassword = prefs.getString('saved_password');
+    final rememberMe = prefs.getBool('remember_me') ?? false;
+
+    if (rememberMe && savedUsername != null && savedPassword != null) {
+      setState(() {
+        usernameController.text = savedUsername;
+        passwordController.text = savedPassword;
+        _rememberMe = true;
+      });
+    }
+  }
 
   Future<void> _login() async {
     final username = usernameController.text.trim();
@@ -49,10 +71,22 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString('user_name', user['name']);
         await prefs.setString('user_id', user['id'].toString());
 
+        // Simpan kredensial jika remember me dicentang
+        if (_rememberMe) {
+          await prefs.setString('saved_username', username);
+          await prefs.setString('saved_password', password);
+
+          await prefs.setBool('remember_me', true);
+        } else {
+          // Hapus kredensial yang tersimpan jika remember me tidak dicentang
+          await prefs.remove('saved_username');
+          await prefs.remove('saved_password');
+          await prefs.setBool('remember_me', false);
+        }
+
         if (mounted) {
           if (user['user_type_id'] == 2) {
             final patient = user['patient'];
-
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -75,7 +109,6 @@ class _LoginPageState extends State<LoginPage> {
         }
       } else {
         final error = jsonDecode(response.body);
-        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(error['message'] ?? 'Login Gagal!')),
         );
@@ -84,20 +117,16 @@ class _LoginPageState extends State<LoginPage> {
     } catch (e) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(
-        // ignore: use_build_context_synchronously
         context,
       ).showSnackBar(SnackBar(content: Text('Terjadi Kesalahan: $e')));
       log('Login failed: ${e.toString()}', name: 'LoginErrorCatch');
     }
   }
 
-  // ignore: unused_element
-  Widget _gap() => const SizedBox(height: 16);
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1565C0), // Biru solid
+      backgroundColor: const Color(0xFF1565C0),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -172,7 +201,22 @@ class _LoginPageState extends State<LoginPage> {
                                       ? 'Password wajib diisi'
                                       : null,
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 8),
+                        // Remember Me Checkbox
+                        Row(
+                          children: [
+                            Checkbox(
+                              value: _rememberMe,
+                              onChanged: (value) {
+                                setState(() {
+                                  _rememberMe = value ?? false;
+                                });
+                              },
+                            ),
+                            const Text('Ingat Saya'),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
                         _isLoading
                             ? const CircularProgressIndicator()
                             : SizedBox(
@@ -203,7 +247,6 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                             ),
                         const SizedBox(height: 16),
-                        const SizedBox(height: 8),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
