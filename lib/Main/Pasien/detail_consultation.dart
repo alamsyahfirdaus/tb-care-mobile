@@ -74,9 +74,15 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
 
   List<dynamic> _sortReplies(List<dynamic> replies) {
     return replies..sort((a, b) {
-      final dateA = DateTime.parse(a['created_at'] ?? '1970-01-01');
-      final dateB = DateTime.parse(b['created_at'] ?? '1970-01-01');
-      return dateA.compareTo(dateB); // Urutan dari yang terlama ke terbaru
+      // Handle both Map and direct field access
+      final aCreatedAt = a is Map ? a['created_at'] : a?.created_at;
+      final bCreatedAt = b is Map ? b['created_at'] : b?.created_at;
+
+      final dateA =
+          DateTime.tryParse(aCreatedAt?.toString() ?? '') ?? DateTime(1970);
+      final dateB =
+          DateTime.tryParse(bCreatedAt?.toString() ?? '') ?? DateTime(1970);
+      return dateA.compareTo(dateB);
     });
   }
 
@@ -91,6 +97,14 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
           value is Map ? _convertToMapStringDynamic(value) : value,
         ),
       );
+    }
+    // Handle case where data might be a List item with toMap() method
+    try {
+      if (data != null && data is! Map) {
+        return data.toMap() as Map<String, dynamic>;
+      }
+    } catch (e) {
+      log("Failed to convert to map: $e");
     }
     return {};
   }
@@ -112,10 +126,20 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
           );
 
           if (repliesSnapshot.exists) {
-            final repliesData = repliesSnapshot.value as Map<dynamic, dynamic>?;
-            _replies =
-                repliesData?.values.map(_convertToMapStringDynamic).toList() ??
-                [];
+            // Handle both Map and List cases
+            if (repliesSnapshot.value is Map) {
+              final repliesData =
+                  repliesSnapshot.value as Map<dynamic, dynamic>?;
+              _replies =
+                  repliesData?.values
+                      .map(_convertToMapStringDynamic)
+                      .toList() ??
+                  [];
+            } else if (repliesSnapshot.value is List) {
+              // If replies are stored as a list
+              final repliesList = repliesSnapshot.value as List<dynamic>;
+              _replies = repliesList.map(_convertToMapStringDynamic).toList();
+            }
           }
         });
       }
@@ -142,11 +166,17 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
         final data = event.snapshot.value;
         if (data != null) {
           setState(() {
-            _replies = _sortReplies(
-              (data as Map<dynamic, dynamic>).values
-                  .map(_convertToMapStringDynamic)
-                  .toList(),
-            );
+            if (data is Map<dynamic, dynamic>) {
+              // Handle Map format
+              _replies = _sortReplies(
+                data.values.map(_convertToMapStringDynamic).toList(),
+              );
+            } else if (data is List<dynamic>) {
+              // Handle List format
+              _replies = _sortReplies(
+                data.map(_convertToMapStringDynamic).toList(),
+              );
+            }
             _scrollToBottom();
           });
         }
@@ -197,6 +227,7 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
             child: SingleChildScrollView(
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
+
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -224,10 +255,12 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
     final bgColor = isOwned ? Colors.blue[50] : Colors.grey[50];
 
     return Container(
+      width: double.maxFinite,
       margin: const EdgeInsets.only(bottom: 16),
       child: Column(
         crossAxisAlignment: alignment,
         children: [
+          // Sender name (if not consultation and not owned by current user)
           if (!isConsultation && !isOwned)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
@@ -240,67 +273,120 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
                 ),
               ),
             ),
+
+          // Message bubble with delete option
           Container(
-            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: bgColor,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (isConsultation)
-                  Text(
-                    message['title'] ?? '',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                if (isConsultation) const SizedBox(height: 8),
-                Text(message['message'] ?? ''),
-                if (message['attachment'] != null) ...[
-                  const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap:
-                        () => widget.service.viewAttachment(
-                          context,
-                          message['attachment'],
+                // Message header row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Consultation title or empty space
+                      if (isConsultation)
+                        Expanded(
+                          child: Text(
+                            message['title'] ?? '',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        )
+                      else
+                        const Spacer(),
+
+                      // Delete button (only for staff/owner)
+                      if (!isConsultation && (widget.isStaff || isOwned))
+                        GestureDetector(
+                          onTap: () => _confirmDelete(message, false),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[200],
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.close,
+                              size: 16,
+                              color: Colors.grey[600],
+                            ),
+                          ),
                         ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.attach_file, size: 16),
-                        const SizedBox(width: 4),
-                        Text(
-                          message['attachment'].split('/').last,
-                          style: TextStyle(
-                            color: Colors.blue[600],
-                            fontSize: 12,
+                    ],
+                  ),
+                ),
+
+                // Message content
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    12,
+                    isConsultation ? 8 : 4,
+                    12,
+                    12,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Message text
+                      Text(message['message'] ?? ''),
+
+                      // Attachment
+                      if (message['attachment'] != null) ...[
+                        const SizedBox(height: 8),
+                        GestureDetector(
+                          onTap:
+                              () => widget.service.viewAttachment(
+                                context,
+                                message['attachment'],
+                              ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.attach_file, size: 16),
+                              const SizedBox(width: 4),
+                              Text(
+                                message['attachment'].split('/').last,
+                                style: TextStyle(
+                                  color: Colors.blue[600],
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ],
             ),
           ),
+
+          // Timestamp
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              widget.service.formatDateTime(message['created_at']),
-              style: TextStyle(color: Colors.grey[500], fontSize: 10),
+            child: Row(
+              mainAxisAlignment:
+                  alignment == CrossAxisAlignment.end
+                      ? MainAxisAlignment.end
+                      : MainAxisAlignment.start,
+              children: [
+                Text(
+                  widget.service.formatDateTime(message['created_at']),
+                  style: TextStyle(color: Colors.grey[500], fontSize: 10),
+                ),
+              ],
             ),
           ),
-          if (!isConsultation && (widget.isStaff || isOwned))
-            Align(
-              alignment: Alignment.centerRight,
-              child: IconButton(
-                icon: const Icon(Icons.delete, size: 16),
-                onPressed: () => _confirmDelete(message, false),
-              ),
-            ),
         ],
       ),
     );
@@ -473,12 +559,14 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
                   Navigator.pop(context);
                   try {
                     if (isConsultation) {
-                      await widget.service.deleteConsultation(message['id']);
+                      await widget.service.deleteConsultation(
+                        message['id'].toString(),
+                      );
                       if (mounted) Navigator.pop(context);
                     } else {
                       await widget.service.deleteReply(
                         widget.consultationId,
-                        message['id'],
+                        message['id'].toString(),
                       );
                     }
                   } catch (e) {

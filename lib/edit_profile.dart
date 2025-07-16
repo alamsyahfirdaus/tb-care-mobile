@@ -89,6 +89,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         'phone': _phoneController.text,
         'gender': _gender == 'Laki-laki' ? 'L' : 'P',
         'place_of_birth': _placeOfBirthController.text,
+        'date_of_birth': _birthDateController.text,
         if (_passwordController.text.isNotEmpty)
           'password': _passwordController.text,
       };

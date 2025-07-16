@@ -33,16 +33,13 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
-  late Future<Map<String, dynamic>> _homeData;
-  late Map<String, dynamic> _patientData;
+  late Future<Map<String, dynamic>> _patientDataFuture;
   late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
-    log(widget.patientId.toString());
-    _homeData = _fetchHomeData();
-    log(_homeData.toString());
+    _patientDataFuture = _fetchPatientData();
     _pages = [
       _buildHomePage(),
       TreatmentPage(patientId: widget.patientId ?? 0),
@@ -52,15 +49,13 @@ class _HomePageState extends State<HomePage> {
     ];
   }
 
-  Future<Map<String, dynamic>> _fetchHomeData() async {
+  Future<Map<String, dynamic>> _fetchPatientData() async {
     final session = await SharedPreferences.getInstance();
     final token = session.getString('token') ?? '';
 
     try {
       final response = await http.get(
-        Uri.parse(
-          '${Connection.BASE_URL}/patients/${widget.patientId}/treatments',
-        ),
+        Uri.parse('${Connection.BASE_URL}/patients/${widget.patientId}/show'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -68,43 +63,36 @@ class _HomePageState extends State<HomePage> {
       );
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> dataJson = jsonDecode(response.body);
-        log(dataJson['data'][0].toString());
-        final Map<String, dynamic> data =
-            dataJson.isNotEmpty ? dataJson['data'][0] : {};
+        final data = jsonDecode(response.body);
+        return data['data'] ?? {};
+      } else {
+        throw Exception('Failed to load patient data');
+      }
+    } catch (e) {
+      log('Error fetching patient data: $e');
+      return {};
+    }
+  }
 
-        final eventResponse = await http.get(
-          Uri.parse(
-            '${Connection.BASE_URL}/treatments/${widget.patientId}/visits',
-          ),
-          headers: {'Authorization': 'Bearer $token'},
-        );
-
-        if (eventResponse.statusCode == 200) {
-          final Map<String, dynamic> dataJson2 = jsonDecode(eventResponse.body);
-          // final Map<String, dynamic> data2 =
-          //     dataJson.isNotEmpty ? dataJson2['data'] : {};
-          // log(data2.toString());
-          data['events'] = dataJson2['data'];
-          log('data events : ${data['events']} ');
+  Widget _buildHomePage() {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _patientDataFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
         }
 
-        final patientDetailResponse = await http.get(
-          Uri.parse('${Connection.BASE_URL}/patients/${widget.patientId}/show'),
-          headers: {'Authorization': 'Bearer $token'},
-        );
-
-        if (patientDetailResponse.statusCode == 200) {
-          final Map<String, dynamic> dataJson3 = jsonDecode(
-            patientDetailResponse.body,
-          );
-          setState(() {
-            _patientData = dataJson3['data'];
-          });
-          // log(dataJson3['data'].toString());
+        if (snapshot.hasError || !snapshot.hasData) {
+          return Center(child: Text('Gagal memuat data: ${snapshot.error}'));
         }
 
-        data['health_tips'] = [
+        final patientData = snapshot.data!;
+        final treatments = patientData['treatments'] as List<dynamic>? ?? [];
+        final currentTreatment = treatments.isNotEmpty ? treatments[0] : null;
+        final visits = currentTreatment?['visits'] as List<dynamic>? ?? [];
+
+        // Add default health tips if not available
+        final healthTips = [
           {
             'title': 'Minum Air yang Cukup',
             'description':
@@ -122,31 +110,6 @@ class _HomePageState extends State<HomePage> {
             'icon': Icons.restaurant,
           },
         ];
-        data['motivational_quote'] =
-            'Kesembuhan dimulai dari tekad yang kuat dan disiplin dalam pengobatan';
-        return data;
-      } else {
-        throw Exception('Failed to load home data');
-      }
-    } catch (e) {
-      print('Error fetching home data: $e');
-      return {};
-    }
-  }
-
-  Widget _buildHomePage() {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _homeData,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasError) {
-          return Center(child: Text('Gagal memuat data'));
-        }
-
-        final data = snapshot.data!;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -157,20 +120,21 @@ class _HomePageState extends State<HomePage> {
               _buildGreetingSection(),
               const SizedBox(height: 24),
 
-              // Treatment Status Card
-              _buildTreatmentCard(data),
-              SizedBox(height: 24),
+              // Treatment Status Card (only show if treatment exists)
+              if (currentTreatment != null) ...[
+                _buildTreatmentCard(currentTreatment),
+                const SizedBox(height: 24),
+              ],
 
-              _buildUpcomingEvents(data['events']),
-              SizedBox(height: 24),
+              // Upcoming Visits (only show if visits exist)
+              if (visits.isNotEmpty) ...[
+                _buildUpcomingEvents(visits),
+                const SizedBox(height: 24),
+              ],
 
               // Health Tips Section
-              _buildHealthTips(data),
-              SizedBox(height: 24),
-
-              // Motivational Quote
-              // _buildMotivationalQuote(data),
-              SizedBox(height: 24),
+              _buildHealthTips(healthTips),
+              const SizedBox(height: 24),
             ],
           ),
         );
@@ -199,22 +163,20 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildTreatmentCard(Map<String, dynamic> treatmentData) {
-    log(treatmentData.toString());
-    // Hitung progress jika data tersedia
+  Widget _buildTreatmentCard(Map<String, dynamic> treatment) {
     final currentDay = _calculateCurrentDay(
-      treatmentData['start_date'],
-      treatmentData['end_date'],
+      treatment['start_date'],
+      treatment['end_date'],
     );
-    final totalDays = treatmentData['treatment_days'] ?? 1;
-    final progress = currentDay / totalDays;
-    log('Progress: $progress');
-
-    // Format waktu obat
+    final totalDays = _calculateTotalDays(
+      treatment['start_date'],
+      treatment['end_date'],
+    );
+    final progress = totalDays > 0 ? currentDay / totalDays : 0.0;
     final medicationTime =
-        treatmentData['medication_time'] != null
-            ? treatmentData['medication_time'].substring(0, 5)
-            : '--:--';
+        treatment['medication_time']?.substring(0, 5) ?? '--:--';
+    final prescription = (treatment['prescription'] as List<dynamic>? ?? [])
+        .join(', ');
 
     return Card(
       elevation: 2,
@@ -230,15 +192,25 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(width: 8),
                 Text(
                   'Status Pengobatan',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
-              treatmentData['treatment_type'] ?? 'Tidak ada jenis pengobatan',
+              _getTreatmentType(treatment['treatment_type_id']),
               style: TextStyle(fontSize: 16, color: Colors.grey[700]),
             ),
+            if (prescription.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Obat: $prescription',
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+              ),
+            ],
             const SizedBox(height: 16),
             LinearProgressIndicator(
               value: progress,
@@ -259,7 +231,7 @@ class _HomePageState extends State<HomePage> {
                       style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                     Text(
-                      '${treatmentData['start_date'] ?? 'Tanggal mulai'} - ${treatmentData['end_date'] ?? 'Tanggal selesai'}',
+                      '${treatment['start_date'] ?? 'Tanggal mulai'} - ${treatment['end_date'] ?? 'Tanggal selesai'}',
                       style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                     ),
                   ],
@@ -270,31 +242,26 @@ class _HomePageState extends State<HomePage> {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: _getStatusColor(
-                      treatmentData['treatment_status'],
-                      true,
-                    ),
+                    color: _getStatusColor(treatment['treatment_status'], true),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
                       color: _getStatusColor(
-                        treatmentData['treatment_status'],
+                        treatment['treatment_status'],
                         false,
                       ),
                     ),
                   ),
                   child: Text(
-                    treatmentData['treatment_status'] ??
-                        'Status tidak tersedia',
+                    treatment['treatment_status'] ?? 'Status tidak tersedia',
                     style: TextStyle(
-                      color: _getStatusTextColor(
-                        treatmentData['treatment_status'],
-                      ),
+                      color: _getStatusTextColor(treatment['treatment_status']),
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 Icon(
@@ -306,7 +273,7 @@ class _HomePageState extends State<HomePage> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Pengingat Minum Obat',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
@@ -353,7 +320,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildUpcomingEvents(List<dynamic> events) {
+  Widget _buildUpcomingEvents(List<dynamic> visits) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -368,14 +335,15 @@ class _HomePageState extends State<HomePage> {
         const SizedBox(height: 12),
         Column(
           children:
-              events.map((event) {
-                // Format date from "2024-12-12" to "12 Des 2024"
-                final date = DateFormat(
-                  'dd MMM yyyy',
-                ).format(DateTime.parse(event['visit_date']));
-
-                // Format time from "08:00:00" to "08:00"
-                final time = event['visit_time'].substring(0, 5);
+              visits.map((visit) {
+                final date =
+                    visit['visit_date'] != null
+                        ? DateFormat(
+                          'dd MMM yyyy',
+                        ).format(DateTime.parse(visit['visit_date']))
+                        : 'Tanggal tidak tersedia';
+                final time = visit['visit_time']?.substring(0, 5) ?? '--:--';
+                final status = visit['visit_status'] ?? 'Status tidak tersedia';
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -389,20 +357,17 @@ class _HomePageState extends State<HomePage> {
                       ),
                       child: const Icon(Icons.event, color: AppColors.primary),
                     ),
-                    title: Text(
-                      'Kunjungan Pengobatan', // Default title since JSON doesn't have title
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    title: const Text(
+                      'Kunjungan Pengobatan',
+                      style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    subtitle: Text('$date • $time • ${event['visit_status']}'),
+                    subtitle: Text('$date • $time • $status'),
                     trailing: const Icon(Icons.chevron_right),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                     tileColor: Colors.grey[50],
-                    onTap: () {
-                      // Handle event tap
-                      _showEventDetails(event);
-                    },
+                    onTap: () => _showEventDetails(visit),
                   ),
                 );
               }).toList(),
@@ -411,106 +376,28 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Helper function to show event details
-  void _showEventDetails(Map<String, dynamic> event) {
-    final date = DateFormat(
-      'EEEE, dd MMMM yyyy',
-      'id_ID',
-    ).format(DateTime.parse(event['visit_date']));
-    final time = event['visit_time'].substring(0, 5);
-
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Detail Kunjungan'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Tanggal: $date'),
-                Text('Waktu: $time'),
-                Text('Status: ${event['visit_status']}'),
-                if (event['notes'] != null) Text('Catatan: ${event['notes']}'),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Tutup'),
-              ),
-            ],
-          ),
-    );
-  }
-
-  // Helper functions
-  int _calculateCurrentDay(String? startDate, String? endDate) {
-    if (startDate == null || endDate == null) return 0;
-
-    try {
-      final start = DateTime.parse(startDate);
-      final end = DateTime.parse(endDate);
-      final today = DateTime.now();
-
-      if (today.isBefore(start)) return 0;
-      if (today.isAfter(end)) return end.difference(start).inDays;
-
-      return today.difference(start).inDays;
-    } catch (e) {
-      return 0;
-    }
-  }
-
-  Color _getStatusColor(String? status, bool isBackground) {
-    switch (status) {
-      case 'Berjalan':
-        return isBackground ? Colors.green[50]! : Colors.green;
-      case 'Selesai':
-        return isBackground ? Colors.blue[50]! : Colors.blue;
-      default:
-        return isBackground ? Colors.grey[200]! : Colors.grey;
-    }
-  }
-
-  Color _getStatusTextColor(String? status) {
-    switch (status) {
-      case 'Berjalan':
-        return Colors.green[800]!;
-      case 'Selesai':
-        return Colors.blue[800]!;
-      default:
-        return Colors.grey[800]!;
-    }
-  }
-
-  Widget _buildHealthTips(Map<String, dynamic> data) {
+  Widget _buildHealthTips(List<Map<String, dynamic>> tips) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Tips Kesehatan',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primary,
-              ),
-            ),
-          ],
+        const Text(
+          'Tips Kesehatan',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: AppColors.primary,
+          ),
         ),
-        SizedBox(height: 12),
+        const SizedBox(height: 12),
         SizedBox(
           height: 180,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            itemCount: data['health_tips'].length,
-            separatorBuilder: (context, index) => SizedBox(width: 12),
+            itemCount: tips.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
-              final tip = data['health_tips'][index];
-              return Container(
+              final tip = tips[index];
+              return SizedBox(
                 width: 200,
                 child: Card(
                   elevation: 2,
@@ -518,23 +405,23 @@ class _HomePageState extends State<HomePage> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Padding(
-                    padding: EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Icon(tip['icon'], color: AppColors.primary, size: 32),
-                        SizedBox(height: 12),
+                        const SizedBox(height: 12),
                         Text(
                           tip['title'],
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
                           ),
                         ),
-                        SizedBox(height: 8),
+                        const SizedBox(height: 8),
                         Text(
                           tip['description'],
-                          style: TextStyle(fontSize: 14),
+                          style: const TextStyle(fontSize: 14),
                         ),
                       ],
                     ),
@@ -548,46 +435,141 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _showUploadDialog() {
+  // Helper methods
+  int _calculateCurrentDay(String? startDate, String? endDate) {
+    if (startDate == null || endDate == null) return 0;
+
+    try {
+      final start = DateTime.parse(startDate);
+      final end = DateTime.parse(endDate);
+      final today = DateTime.now();
+
+      if (today.isBefore(start)) return 0;
+      if (today.isAfter(end)) return end.difference(start).inDays;
+
+      return today.difference(start).inDays + 1; // +1 to include current day
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  int _calculateTotalDays(String? startDate, String? endDate) {
+    if (startDate == null || endDate == null) return 1;
+
+    try {
+      final start = DateTime.parse(startDate);
+      final end = DateTime.parse(endDate);
+      return end.difference(start).inDays;
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  String _getTreatmentType(int? typeId) {
+    switch (typeId) {
+      case 1:
+        return 'Pengobatan TB Aktif';
+      case 2:
+        return 'Pengobatan TB Laten';
+      case 3:
+        return 'Pengobatan TB MDR';
+      default:
+        return 'Jenis Pengobatan Tidak Diketahui';
+    }
+  }
+
+  Color _getStatusColor(String? status, bool isBackground) {
+    switch (status) {
+      case 'Berjalan':
+        return isBackground ? Colors.green[50]! : Colors.green;
+      case 'Selesai':
+        return isBackground ? Colors.blue[50]! : Colors.blue;
+      case 'Terjadwal':
+        return isBackground ? Colors.orange[50]! : Colors.orange;
+      default:
+        return isBackground ? Colors.grey[200]! : Colors.grey;
+    }
+  }
+
+  Color _getStatusTextColor(String? status) {
+    switch (status) {
+      case 'Berjalan':
+        return Colors.green[800]!;
+      case 'Selesai':
+        return Colors.blue[800]!;
+      case 'Terjadwal':
+        return Colors.orange[800]!;
+      default:
+        return Colors.grey[800]!;
+    }
+  }
+
+  void _showEventDetails(Map<String, dynamic> visit) {
+    final date =
+        visit['visit_date'] != null
+            ? DateFormat(
+              'EEEE, dd MMMM yyyy',
+              'id_ID',
+            ).format(DateTime.parse(visit['visit_date']))
+            : 'Tanggal tidak tersedia';
+    final time = visit['visit_time']?.substring(0, 5) ?? '--:--';
+    final status = visit['visit_status'] ?? 'Status tidak tersedia';
+    final notes = visit['notes'] ?? 'Tidak ada catatan';
+
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Konfirmasi Minum Obat'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Apakah Anda sudah minum obat hari ini?'),
-              SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: Text('Nanti'),
-                    ),
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _showUploadOptions();
-                      },
-                      child: Text('Konfirmasi'),
-                    ),
-                  ),
-                ],
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Detail Kunjungan'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Tanggal: $date'),
+                Text('Waktu: $time'),
+                Text('Status: $status'),
+                Text('Catatan: $notes'),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Tutup'),
               ),
             ],
           ),
-        );
-      },
+    );
+  }
+
+  void _showUploadDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Konfirmasi Minum Obat'),
+            content: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [Text('Apakah Anda sudah minum obat hari ini?')],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Nanti'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _showUploadOptions();
+                },
+                child: const Text('Konfirmasi'),
+              ),
+            ],
+          ),
     );
   }
 
   void _showUploadOptions() {
-    final ImagePicker _picker = ImagePicker();
+    final ImagePicker picker = ImagePicker();
 
     showModalBottomSheet(
       context: context,
@@ -607,7 +589,7 @@ class _HomePageState extends State<HomePage> {
                   title: const Text('Ambil Foto'),
                   onTap: () async {
                     Navigator.pop(context);
-                    final XFile? photo = await _picker.pickImage(
+                    final XFile? photo = await picker.pickImage(
                       source: ImageSource.camera,
                     );
                     if (photo != null) {
@@ -620,7 +602,7 @@ class _HomePageState extends State<HomePage> {
                   title: const Text('Pilih dari Galeri'),
                   onTap: () async {
                     Navigator.pop(context);
-                    final XFile? image = await _picker.pickImage(
+                    final XFile? image = await picker.pickImage(
                       source: ImageSource.gallery,
                     );
                     if (image != null) {
@@ -637,7 +619,6 @@ class _HomePageState extends State<HomePage> {
                         content: Text('Konfirmasi obat berhasil dicatat'),
                       ),
                     );
-                    // Jalankan aksi tanpa foto di sini jika perlu
                   },
                   child: const Text('Tanpa Foto'),
                 ),
@@ -647,25 +628,22 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _uploadImage(File imageFile, String patientTreatmentId) async {
-    final url = Uri.parse('${Connection.BASE_URL}/treatments/proof');
-
-    final request = http.MultipartRequest('POST', url);
-
-    // Tambahkan token kalau pakai auth
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-    request.headers['Authorization'] = 'Bearer $token';
-
-    // Tambahkan form field dan file
-    request.fields['patient_treatment_id'] = patientTreatmentId;
-    request.files.add(
-      await http.MultipartFile.fromPath('photo', imageFile.path),
-    );
+  Future<void> _uploadImage(File imageFile) async {
+    final session = await SharedPreferences.getInstance();
+    final token = session.getString('token') ?? '';
 
     try {
-      final response = await request.send();
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${Connection.BASE_URL}/treatments/proof'),
+      );
+      request.headers['Authorization'] = 'Bearer $token';
 
+      request.files.add(
+        await http.MultipartFile.fromPath('photo', imageFile.path),
+      );
+
+      final response = await request.send();
       if (response.statusCode == 201) {
         ScaffoldMessenger.of(
           context,
@@ -683,10 +661,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _handleSelectedImage(File imageFile) async {
-    await _uploadImage(
-      imageFile,
-      _patientData['patient_treatment_id'].toString(),
-    );
+    await _uploadImage(imageFile);
   }
 
   @override

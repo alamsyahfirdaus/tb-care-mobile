@@ -351,7 +351,7 @@ class _ConsultationPageState extends State<ConsultationPage> {
                     icon: const Icon(Icons.delete, size: 18, color: Colors.red),
                     onPressed:
                         () => _confirmDelete(
-                          consultation['id'],
+                          consultation['id'].toString(),
                           isOwned: isOwned,
                         ),
                   ),
@@ -399,8 +399,12 @@ class _ConsultationPageState extends State<ConsultationPage> {
   }
 
   void _confirmDelete(String consultationId, {required bool isOwned}) {
+    // Store context and scaffold references before async operations
+    final currentContext = context;
+    final scaffold = ScaffoldMessenger.of(currentContext);
+
     showDialog(
-      context: context,
+      context: currentContext,
       builder:
           (context) => AlertDialog(
             title: const Text('Hapus Konsultasi'),
@@ -416,18 +420,46 @@ class _ConsultationPageState extends State<ConsultationPage> {
               ),
               TextButton(
                 onPressed: () async {
+                  // Close dialog immediately
                   Navigator.pop(context);
+
+                  // Show loading indicator
+                  final loadingSnackBar = scaffold.showSnackBar(
+                    const SnackBar(
+                      content: Text('Menghapus konsultasi...'),
+                      duration: Duration(
+                        minutes: 1,
+                      ), // Long duration for loading
+                    ),
+                  );
+
                   try {
                     await _service.deleteConsultation(consultationId);
-                    ScaffoldMessenger.of(context).showSnackBar(
+
+                    // Hide loading indicator
+                    scaffold.hideCurrentSnackBar();
+
+                    // Show success message
+                    scaffold.showSnackBar(
                       const SnackBar(
                         content: Text('Konsultasi berhasil dihapus'),
+                        duration: Duration(seconds: 2),
                       ),
                     );
+
+                    // Check if we can pop and if widget is still mounted
+                    if (mounted && Navigator.canPop(currentContext)) {
+                      Navigator.pop(currentContext);
+                    }
                   } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    // Hide loading indicator
+                    scaffold.hideCurrentSnackBar();
+
+                    // Show error message
+                    scaffold.showSnackBar(
                       SnackBar(
                         content: Text('Gagal menghapus: ${e.toString()}'),
+                        duration: Duration(seconds: 2),
                       ),
                     );
                   }

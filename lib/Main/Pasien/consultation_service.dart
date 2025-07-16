@@ -331,10 +331,16 @@ class ConsultationService {
     Function(List<dynamic>) onRepliesUpdated,
   ) {
     _repliesRef.child(consultationId).onValue.listen((event) {
-      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      final data = event.snapshot.value;
       if (data != null) {
-        final replies = data.values.map((item) => item).toList();
-        onRepliesUpdated(replies);
+        if (data is Map) {
+          // Handle Map format
+          final replies = data.values.map((item) => item).toList();
+          onRepliesUpdated(replies);
+        } else if (data is List) {
+          // Handle List format
+          onRepliesUpdated(data);
+        }
       } else {
         onRepliesUpdated([]);
       }
@@ -372,8 +378,15 @@ class ConsultationService {
     try {
       final snapshot = await _repliesRef.child(consultationId).get();
       if (snapshot.exists) {
-        final data = snapshot.value as Map<dynamic, dynamic>;
-        return data.values.map((reply) => reply).toList();
+        final data = snapshot.value;
+
+        if (data is Map) {
+          // Handle Map format
+          return data.values.map((reply) => reply).toList();
+        } else if (data is List) {
+          // Handle List format
+          return data;
+        }
       }
       return [];
     } catch (e) {
@@ -424,7 +437,19 @@ class ConsultationService {
     };
 
     // 3. Optimistic update to Firebase
-    await _repliesRef.child(consultationId).child(tempReplyId).set(newReply);
+    final replyRef = _repliesRef.child(consultationId).child(tempReplyId);
+    await replyRef.set({
+      ...newReply,
+      // Ensure all fields are present
+      'consultation_id': consultationId,
+      'message': message,
+      'sender_id': userId,
+      'sender_name': userName,
+      'attachment': null,
+      'created_at': DateTime.now().toIso8601String(),
+      'is_read': false,
+      'status': 'sending',
+    });
 
     try {
       // 4. Prepare request

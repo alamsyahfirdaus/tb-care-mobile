@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:apk_tb_care/Main/Pasien/history.dart';
 import 'package:apk_tb_care/Main/Pasien/treatment_history.dart';
-import 'package:apk_tb_care/Section/screening.dart';
+import 'package:apk_tb_care/Main/Pasien/screening.dart';
 import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/values/colors.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -561,7 +561,16 @@ class _TreatmentPageState extends State<TreatmentPage> {
           } else if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           } else if (!snapshot.hasData || _currentTreatment == null) {
-            return const Center(child: Text('Tidak ada data pengobatan'));
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  _buildScreeningSection(),
+                  SizedBox(height: 20),
+                  const Center(child: Text('Tidak ada data pengobatan')),
+                ],
+              ),
+            );
           }
 
           return SingleChildScrollView(
@@ -1130,13 +1139,8 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   void _navigateToScreening(String type) {
-    switch (type) {
-      case "Skrining Visual":
-        Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (context) => const ScreeningPage()));
-        break;
-      default:
-    }
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => const ScreeningPage()));
   }
 }
