@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:apk_tb_care/Main/Pasien/consultation.dart';
 import 'package:apk_tb_care/Main/Pasien/education.dart';
+import 'package:apk_tb_care/Main/Pasien/screening.dart';
 import 'package:apk_tb_care/Main/Petugas/patient.dart';
 import 'package:apk_tb_care/connection.dart';
 import 'package:apk_tb_care/profile.dart';
@@ -91,6 +92,8 @@ class _StaffHomePageState extends State<StaffHomePage> {
           _buildRecentPatientsSection(),
           const SizedBox(height: 16),
           _buildFullStats(),
+          const SizedBox(height: 16),
+          _buildScreeningSection(),
         ],
       ),
     );
@@ -630,6 +633,45 @@ class _StaffHomePageState extends State<StaffHomePage> {
     );
   }
 
+  Widget _buildScreeningSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Skrining TB",
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          "Lakukan pengecekan rutin terhadap gejala TB Anda. ",
+          style: TextStyle(fontSize: 14),
+        ),
+        const SizedBox(height: 12),
+        _buildScreeningButton("Skrining TB", Icons.paste),
+      ],
+    );
+  }
+
+  Widget _buildScreeningButton(String title, IconData icon) {
+    return OutlinedButton.icon(
+      label: Text(title),
+      onPressed: () => _navigateToScreening(title),
+      icon: Icon(icon, color: Colors.blue),
+      style: OutlinedButton.styleFrom(
+        alignment: Alignment.centerLeft,
+        fixedSize: Size(double.maxFinite, 48),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
+  void _navigateToScreening(String type) {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => const ScreeningPage()));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -644,19 +686,6 @@ class _StaffHomePageState extends State<StaffHomePage> {
             fontWeight: FontWeight.bold,
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Badge(
-              smallSize: 8,
-              child: Icon(Icons.notifications_none),
-            ),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Belum ada notifikasi baru')),
-              );
-            },
-          ),
-        ],
       ),
       body: IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: NavigationBar(

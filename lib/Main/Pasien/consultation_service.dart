@@ -614,8 +614,8 @@ class ConsultationService {
             ),
             TextButton(
               onPressed: () async {
-                Navigator.pop(context);
                 await _downloadFile(url, context);
+                Navigator.pop(context);
               },
               child: const Text('Unduh'),
             ),
@@ -657,14 +657,15 @@ class ConsultationService {
       // Handle permissions
       if (Platform.isAndroid) {
         // Request storage permissions
-        final status = await Permission.storage.request();
-        if (!status.isGranted) {
-          await Permission.storage.request();
-          throw Exception('Storage permission denied');
+
+        if (await Permission.manageExternalStorage.request().isDenied) {
+          // Buka pengaturan manual
+          await openAppSettings();
         }
 
         // For Android 10+, we need manage external storage for some cases
         if (await Permission.manageExternalStorage.isDenied) {
+          openAppSettings();
           await Permission.manageExternalStorage.request();
         }
       }

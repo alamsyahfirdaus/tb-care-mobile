@@ -209,6 +209,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
   Future<void> _initializeBackgroundTasks() async {
     await _checkPermissions();
     await _disableBatteryOptimization();
+    await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
     await _initNotifications();
     _checkMissedNotifications();
     _getSharedPreferences();
@@ -402,53 +403,31 @@ class _TreatmentPageState extends State<TreatmentPage> {
   }
 
   Future<void> _scheduleDailyReminder(int hour, int minute) async {
+    await Workmanager().cancelByTag('daily_medication_reminder');
     try {
-      // Gunakan WorkManager sebagai primary scheduler
-      await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
-
-      // Batalkan task sebelumnya
-      await Workmanager().cancelByTag('daily_medication_reminder');
-
-      // Hitung waktu penjadwalan
       final now = DateTime.now().toLocal();
-      var scheduledTime =
-          DateTime(now.year, now.month, now.day, hour, minute).toLocal();
+      var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
       if (scheduledTime.isBefore(now)) {
         scheduledTime = scheduledTime.add(const Duration(days: 1));
       }
+
       final initialDelay = scheduledTime.difference(now);
 
-      // Jadwalkan dengan WorkManager
-      await Workmanager().registerOneOffTask(
+      await Workmanager().registerPeriodicTask(
         'daily_medication_reminder',
         'daily_medication',
+        frequency: const Duration(hours: 24),
         initialDelay: initialDelay,
+        existingWorkPolicy: ExistingWorkPolicy.replace,
         constraints: Constraints(
           networkType: NetworkType.notRequired,
           requiresBatteryNotLow: false,
         ),
-        existingWorkPolicy: ExistingWorkPolicy.replace,
       );
 
-      // Sebagai cadangan, tetap jadwalkan dengan AlarmManager
-      try {
-        await AndroidAlarmManager.oneShotAt(
-          scheduledTime,
-          0,
-          notificationCallback,
-          exact: true,
-          wakeup: true,
-          allowWhileIdle: true,
-        );
-      } catch (e) {
-        debugPrint('AlarmManager backup failed: $e');
-      }
-
-      debugPrint(
-        'Daily reminder scheduled at ${scheduledTime.toIso8601String()}',
-      );
+      debugPrint('📆 Daily reminder scheduled via WorkManager');
     } catch (e) {
-      debugPrint('Error scheduling daily reminder: $e');
+      debugPrint('❌ Error scheduling daily reminder: $e');
     }
   }
 

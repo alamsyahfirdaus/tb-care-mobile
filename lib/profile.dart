@@ -130,13 +130,27 @@ class _ProfilePageState extends State<ProfilePage> {
     );
 
     if (confirmed == true) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginPage()),
-        (route) => false,
+      final session = await SharedPreferences.getInstance();
+      final token = session.getString('token');
+
+      final response = await http.post(
+        Uri.parse('${Connection.BASE_URL}/logout'),
+        headers: {'Authorization': 'Bearer ${token}'},
       );
+
+      if (response.statusCode == 200) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (context) => const LoginPage()),
+          (route) => false,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Logout failed, please try again')),
+        );
+      }
     }
   }
 
