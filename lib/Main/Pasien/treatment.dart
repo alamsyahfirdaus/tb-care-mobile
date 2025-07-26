@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
@@ -22,14 +23,12 @@ import 'package:workmanager/workmanager.dart';
 @pragma('vm:entry-point')
 void notificationCallback() async {
   try {
-    // Simpan waktu notifikasi terakhir
     final prefs = await SharedPreferences.getInstance();
     prefs.setInt('lastNotificationTime', DateTime.now().millisecondsSinceEpoch);
 
     final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
         FlutterLocalNotificationsPlugin();
 
-    // Pastikan inisialisasi
     await flutterLocalNotificationsPlugin.initialize(
       const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -94,7 +93,22 @@ void callbackDispatcher() {
             ),
           ),
         );
-        // Don't try to reschedule here - it's handled by the periodic task
+
+        // Reschedule for next day
+        final now = DateTime.now();
+        final nextDay = DateTime(
+          now.year,
+          now.month,
+          now.day,
+        ).add(const Duration(days: 1));
+        final delay = nextDay.difference(now);
+
+        await Workmanager().registerOneOffTask(
+          'daily_medication_rescheduled',
+          'daily_medication',
+          initialDelay: delay,
+          constraints: Constraints(networkType: NetworkType.notRequired),
+        );
         break;
 
       case 'visit_reminder':
@@ -115,68 +129,6 @@ void callbackDispatcher() {
 
     return Future.value(true);
   });
-}
-
-@pragma('vm:entry-point')
-void visitNotificationCallback() async {
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
-
-  try {
-    // Initialize notifications plugin
-    await flutterLocalNotificationsPlugin.initialize(
-      const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      ),
-      onDidReceiveNotificationResponse: (response) {},
-    );
-
-    // Show the visit notification
-    await flutterLocalNotificationsPlugin.show(
-      101, // ID unik untuk notifikasi kunjungan
-      'Kunjungan Pengobatan',
-      'Anda memiliki jadwal kunjungan dalam 1 jam',
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'visit_channel', // ID channel
-          'Pengingat Kunjungan', // Nama channel
-          channelDescription: 'Channel untuk pengingat kunjungan pengobatan',
-          importance: Importance.high,
-          priority: Priority.high,
-          playSound: true,
-          sound: UriAndroidNotificationSound(
-            'content://settings/system/notification_sound',
-          ),
-          enableVibration: true,
-          color: Colors.blue,
-          ledColor: Colors.blue,
-          ledOnMs: 1000,
-          ledOffMs: 500,
-          // Tambahkan ini untuk Android 8.0+
-          channelShowBadge: true,
-          timeoutAfter: 3600000, // 1 jam
-        ),
-      ),
-    );
-    debugPrint('Visit notification shown successfully at ${DateTime.now()}');
-  } catch (e) {
-    debugPrint('Error showing visit notification: $e');
-    // Fallback tanpa sound jika error
-    await flutterLocalNotificationsPlugin.show(
-      101,
-      'Kunjungan Pengobatan',
-      'Anda memiliki jadwal kunjungan dalam 1 jam',
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'visit_channel',
-          'Pengingat Kunjungan',
-          channelDescription: 'Channel untuk pengingat kunjungan pengobatan',
-          importance: Importance.high,
-          priority: Priority.high,
-        ),
-      ),
-    );
-  }
 }
 
 class TreatmentPage extends StatefulWidget {
@@ -233,12 +185,9 @@ class _TreatmentPageState extends State<TreatmentPage> {
     if (lastNotificationTime != null) {
       final diffHours = (now - lastNotificationTime) / (1000 * 60 * 60);
       if (diffHours > 26) {
-        // Jika lebih dari 26 jam sejak notifikasi terakhir
         _showMissedNotificationWarning();
       }
     }
-
-    // Simpan waktu pengecekan terakhir
     prefs.setInt('lastNotificationTime', now);
   }
 
@@ -281,38 +230,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
     }
   }
 
-  Future<void> _scheduleWorkManagerBackup(int hour, int minute) async {
-    try {
-      await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
-
-      // Hitung delay awal
-      final now = DateTime.now().toLocal();
-      var scheduledTime =
-          DateTime(now.year, now.month, now.day, hour, minute).toLocal();
-      if (scheduledTime.isBefore(now)) {
-        scheduledTime = scheduledTime.add(const Duration(days: 1));
-      }
-      final initialDelay = scheduledTime.difference(now);
-
-      await Workmanager().registerPeriodicTask(
-        'medicationReminderBackup',
-        'medicationReminderTask',
-        frequency: const Duration(hours: 24),
-        initialDelay: initialDelay,
-        constraints: Constraints(
-          networkType: NetworkType.notRequired,
-          requiresBatteryNotLow: false,
-          requiresCharging: false,
-        ),
-      );
-
-      log('Backup reminder scheduled with WorkManager');
-    } catch (e) {
-      log('Error scheduling WorkManager backup: $e');
-    }
-  }
-
-  void _getSharedPreferences() async {
+  Future<void> _getSharedPreferences() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     setState(() {
       _notifIsActive = prefs.getBool('notifIsActive') ?? false;
@@ -327,7 +245,6 @@ class _TreatmentPageState extends State<TreatmentPage> {
       const InitializationSettings(android: initializationSettingsAndroid),
     );
 
-    // Create channels with proper configuration
     const AndroidNotificationChannel medicationChannel =
         AndroidNotificationChannel(
           'reminder_channel',
@@ -357,16 +274,11 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
     await androidPlatform?.createNotificationChannel(medicationChannel);
     await androidPlatform?.createNotificationChannel(visitChannel);
-
-    // Verify channels were created
-    final channels = await androidPlatform?.getNotificationChannels();
-    debugPrint('Created channels: $channels');
   }
 
   Future<void> _setNotificationStatus(bool status, int hour, int minute) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Request necessary permissions
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
@@ -382,12 +294,12 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
     if (status) {
       if (await _canScheduleExactAlarms()) {
-        await _scheduleDailyReminder(hour, minute);
+        await _scheduleExactDailyReminder(hour, minute);
       }
-      await _scheduleWorkManagerBackup(hour, minute); // Tambahkan backup
+      await _scheduleWorkManagerBackup(hour, minute);
     } else {
       await AndroidAlarmManager.cancel(0);
-      await Workmanager().cancelByTag('medicationReminderBackup');
+      await Workmanager().cancelByTag('daily_medication');
     }
   }
 
@@ -395,15 +307,41 @@ class _TreatmentPageState extends State<TreatmentPage> {
     if (Platform.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
       if (androidInfo.version.sdkInt >= 31) {
-        // Android 12+
         return await Permission.scheduleExactAlarm.isGranted;
       }
     }
     return true;
   }
 
-  Future<void> _scheduleDailyReminder(int hour, int minute) async {
-    await Workmanager().cancelByTag('daily_medication_reminder');
+  Future<void> _scheduleExactDailyReminder(int hour, int minute) async {
+    try {
+      final now = DateTime.now().toLocal();
+      var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
+      if (scheduledTime.isBefore(now)) {
+        scheduledTime = scheduledTime.add(const Duration(days: 1));
+      }
+
+      await AndroidAlarmManager.periodic(
+        const Duration(days: 1),
+        0,
+        notificationCallback,
+        startAt: scheduledTime,
+        exact: true,
+        wakeup: true,
+        rescheduleOnReboot: true,
+      );
+
+      debugPrint('⏰ Exact daily reminder scheduled for $scheduledTime');
+    } catch (e) {
+      debugPrint('❌ Error scheduling exact reminder: $e');
+      // Fallback to WorkManager if exact scheduling fails
+      await _scheduleWorkManagerBackup(hour, minute);
+    }
+  }
+
+  Future<void> _scheduleWorkManagerBackup(int hour, int minute) async {
+    await Workmanager().cancelByTag('daily_medication');
+
     try {
       final now = DateTime.now().toLocal();
       var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
@@ -413,21 +351,17 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
       final initialDelay = scheduledTime.difference(now);
 
-      await Workmanager().registerPeriodicTask(
-        'daily_medication_reminder',
+      await Workmanager().registerOneOffTask(
         'daily_medication',
-        frequency: const Duration(hours: 24),
+        'daily_medication',
         initialDelay: initialDelay,
-        existingWorkPolicy: ExistingWorkPolicy.replace,
-        constraints: Constraints(
-          networkType: NetworkType.notRequired,
-          requiresBatteryNotLow: false,
-        ),
+        constraints: Constraints(networkType: NetworkType.notRequired),
+        tag: 'daily_medication',
       );
 
-      debugPrint('📆 Daily reminder scheduled via WorkManager');
+      debugPrint('📆 WorkManager backup scheduled for $scheduledTime');
     } catch (e) {
-      debugPrint('❌ Error scheduling daily reminder: $e');
+      debugPrint('❌ Error scheduling WorkManager backup: $e');
     }
   }
 
@@ -469,7 +403,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
         );
 
         debugPrint(
-          'Scheduled visit reminder for ${visit['id']} at ${reminderTime.toIso8601String()}',
+          'Scheduled visit reminder for ${visit['id']} at $reminderTime',
         );
       } catch (e) {
         debugPrint('Error scheduling visit ${visit['id']}: $e');

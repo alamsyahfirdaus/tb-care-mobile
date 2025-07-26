@@ -138,6 +138,7 @@ class _ConsultationPageState extends State<ConsultationPage> {
     try {
       final futures =
           consultations.map((consultation) async {
+            await Future.delayed(Duration(milliseconds: 300));
             final id = consultation['id'].toString();
             print('SYNCING ID: $id');
 
@@ -148,8 +149,12 @@ class _ConsultationPageState extends State<ConsultationPage> {
 
             // Sync replies separately under the replies node
             final replies = formatted['replies'] as Map<String, dynamic>;
+            print('✅ Consultation $id synced');
+
             if (replies.isNotEmpty) {
+              print('⏳ Syncing replies for $id...');
               await _service.repliesRef.child(id).set(replies);
+              print('✅ Replies for $id synced');
             }
 
             print('SYNCED ID: $id');
