@@ -75,8 +75,13 @@ void callbackDispatcher() {
       ),
     );
 
-    switch (task) {
-      case 'daily_medication':
+    if (task == 'daily_medication') {
+      // Check if we already showed notification today
+      final prefs = await SharedPreferences.getInstance();
+      final lastShown = prefs.getString('last_shown_date');
+      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+      if (lastShown != today) {
         await notifications.show(
           0,
           'Reminder Pengobatan',
@@ -94,37 +99,33 @@ void callbackDispatcher() {
           ),
         );
 
-        // Reschedule for next day
-        final now = DateTime.now();
-        final nextDay = DateTime(
-          now.year,
-          now.month,
-          now.day,
-        ).add(const Duration(days: 1));
-        final delay = nextDay.difference(now);
+        await prefs.setString('last_shown_date', today);
+      }
 
-        await Workmanager().registerOneOffTask(
-          'daily_medication_rescheduled',
-          'daily_medication',
-          initialDelay: delay,
-          constraints: Constraints(networkType: NetworkType.notRequired),
-        );
-        break;
+      // Reschedule for next day (only if this is the correct execution)
+      final now = DateTime.now();
+      final scheduledHour = inputData?['hour'] ?? 8;
+      final scheduledMinute = inputData?['minute'] ?? 0;
+      var nextTime = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        scheduledHour,
+        scheduledMinute,
+      ).add(const Duration(days: 1));
 
-      case 'visit_reminder':
-        await notifications.show(
-          101,
-          inputData?['title'] ?? 'Kunjungan Pengobatan',
-          inputData?['message'] ?? 'Anda memiliki jadwal kunjungan',
-          const NotificationDetails(
-            android: AndroidNotificationDetails(
-              'visit_channel',
-              'Pengingat Kunjungan',
-              importance: Importance.high,
-            ),
-          ),
-        );
-        break;
+      if (nextTime.isBefore(now)) {
+        nextTime = nextTime.add(const Duration(days: 1));
+      }
+
+      await Workmanager().registerOneOffTask(
+        'daily_medication_${nextTime.millisecondsSinceEpoch}',
+        'daily_medication',
+        initialDelay: nextTime.difference(now),
+        constraints: Constraints(networkType: NetworkType.notRequired),
+        inputData: {'hour': scheduledHour, 'minute': scheduledMinute},
+        tag: 'daily_medication',
+      );
     }
 
     return Future.value(true);
@@ -315,34 +316,41 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
   Future<void> _scheduleExactDailyReminder(int hour, int minute) async {
     try {
+      // Cancel any existing alarms first
+      await AndroidAlarmManager.cancel(0);
+      await Workmanager().cancelByTag('daily_medication');
+
       final now = DateTime.now().toLocal();
       var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
       if (scheduledTime.isBefore(now)) {
         scheduledTime = scheduledTime.add(const Duration(days: 1));
       }
 
-      await AndroidAlarmManager.periodic(
-        const Duration(days: 1),
+      // Schedule exact alarm
+      await AndroidAlarmManager.oneShotAt(
+        scheduledTime,
         0,
         notificationCallback,
-        startAt: scheduledTime,
         exact: true,
         wakeup: true,
         rescheduleOnReboot: true,
       );
 
       debugPrint('⏰ Exact daily reminder scheduled for $scheduledTime');
+
+      // Also schedule WorkManager as backup (but only once)
+      await _scheduleWorkManagerBackup(hour, minute);
     } catch (e) {
       debugPrint('❌ Error scheduling exact reminder: $e');
-      // Fallback to WorkManager if exact scheduling fails
+      // Fallback to WorkManager only
       await _scheduleWorkManagerBackup(hour, minute);
     }
   }
 
   Future<void> _scheduleWorkManagerBackup(int hour, int minute) async {
-    await Workmanager().cancelByTag('daily_medication');
-
     try {
+      await Workmanager().cancelByTag('daily_medication');
+
       final now = DateTime.now().toLocal();
       var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
       if (scheduledTime.isBefore(now)) {
@@ -352,7 +360,7 @@ class _TreatmentPageState extends State<TreatmentPage> {
       final initialDelay = scheduledTime.difference(now);
 
       await Workmanager().registerOneOffTask(
-        'daily_medication',
+        'daily_medication_${scheduledTime.millisecondsSinceEpoch}',
         'daily_medication',
         initialDelay: initialDelay,
         constraints: Constraints(networkType: NetworkType.notRequired),
