@@ -419,71 +419,76 @@ class _ConsultationDetailPageState extends State<ConsultationDetailPage> {
   }
 
   Widget _buildReplyInput() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: Colors.grey[300]!)),
-        color: Colors.white,
-      ),
-      child: Column(
-        children: [
-          if (_attachment != null)
-            Container(
-              padding: const EdgeInsets.all(8),
-              margin: const EdgeInsets.only(bottom: 8),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.attach_file, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _attachmentName ?? 'Lampiran',
-                      overflow: TextOverflow.ellipsis,
+    return SafeArea(
+      bottom: true,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: Colors.grey[300]!)),
+          color: Colors.white,
+        ),
+        child: Column(
+          children: [
+            if (_attachment != null)
+              Container(
+                padding: const EdgeInsets.all(8),
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.attach_file, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _attachmentName ?? 'Lampiran',
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 16),
-                    onPressed: () {
-                      setState(() {
-                        _attachment = null;
-                        _attachmentName = null;
-                      });
-                    },
-                  ),
-                ],
-              ),
-            ),
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.attach_file),
-                onPressed: _pickFile,
-              ),
-              Expanded(
-                child: TextField(
-                  controller: _messageController,
-                  decoration: InputDecoration(
-                    hintText: "Tulis balasan...",
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () {
+                        setState(() {
+                          _attachment = null;
+                          _attachmentName = null;
+                        });
+                      },
                     ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                  ),
-                  maxLines: 3,
-                  minLines: 1,
+                  ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.send),
-                onPressed: _isSending ? null : _sendReply,
-              ),
-            ],
-          ),
-        ],
+            Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.attach_file),
+                  onPressed: _pickFile,
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    decoration: InputDecoration(
+                      hintText: "Tulis balasan...",
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                      ),
+                    ),
+                    maxLines: 3,
+                    minLines: 1,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: _isSending ? null : _sendReply,
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

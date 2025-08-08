@@ -29,7 +29,7 @@ class ConsultationService {
   StreamSubscription<DatabaseEvent>? _repliesSubscription;
 
   static const String _databaseUrl =
-      'https://apk-tb-care-default-rtdb.asia-southeast1.firebasedatabase.app';
+      'https://tb-care-id-default-rtdb.asia-southeast1.firebasedatabase.app/';
 
   ConsultationService()
     : _consultationsRef = FirebaseDatabase.instanceFor(

@@ -68,66 +68,66 @@ void notificationCallback() async {
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
-    final notifications = FlutterLocalNotificationsPlugin();
-    await notifications.initialize(
-      const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      ),
-    );
-
     if (task == 'daily_medication') {
-      // Check if we already showed notification today
-      final prefs = await SharedPreferences.getInstance();
-      final lastShown = prefs.getString('last_shown_date');
-      final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final notifications = FlutterLocalNotificationsPlugin();
+      await notifications.initialize(
+        const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        ),
+      );
 
-      if (lastShown != today) {
-        await notifications.show(
-          0,
-          'Reminder Pengobatan',
-          'Saatnya minum obat! Jangan lupa ya!',
-          const NotificationDetails(
-            android: AndroidNotificationDetails(
-              'reminder_channel',
-              'Pengingat Harian',
-              importance: Importance.high,
-              sound: UriAndroidNotificationSound(
-                'content://settings/system/notification_sound',
+      // Get the intended scheduled time
+      final scheduledTime = DateTime.parse(
+        inputData?['scheduled_time'] ?? DateTime.now().toString(),
+      );
+      final now = DateTime.now().toLocal();
+
+      // Only show notification if we're within 15 minutes of scheduled time
+      if (now.difference(scheduledTime).abs() < const Duration(minutes: 15)) {
+        final prefs = await SharedPreferences.getInstance();
+        final lastShown = prefs.getString('last_shown_date');
+        final today = DateFormat('yyyy-MM-dd').format(now);
+
+        if (lastShown != today) {
+          await notifications.show(
+            0,
+            'Reminder Pengobatan',
+            'Saatnya minum obat! Jangan lupa ya!',
+            const NotificationDetails(
+              android: AndroidNotificationDetails(
+                'reminder_channel',
+                'Pengingat Harian',
+                importance: Importance.high,
+                priority: Priority.high,
               ),
-              priority: Priority.high,
             ),
-          ),
-        );
-
-        await prefs.setString('last_shown_date', today);
+          );
+          await prefs.setString('last_shown_date', today);
+        }
       }
 
-      // Reschedule for next day (only if this is the correct execution)
-      final now = DateTime.now();
-      final scheduledHour = inputData?['hour'] ?? 8;
-      final scheduledMinute = inputData?['minute'] ?? 0;
-      var nextTime = DateTime(
+      // Reschedule for next day at correct time
+      final nextTime = DateTime(
         now.year,
         now.month,
         now.day,
-        scheduledHour,
-        scheduledMinute,
+        inputData?['hour'] ?? 12, // Default to 12:00 if not specified
+        inputData?['minute'] ?? 0,
       ).add(const Duration(days: 1));
-
-      if (nextTime.isBefore(now)) {
-        nextTime = nextTime.add(const Duration(days: 1));
-      }
 
       await Workmanager().registerOneOffTask(
         'daily_medication_${nextTime.millisecondsSinceEpoch}',
         'daily_medication',
         initialDelay: nextTime.difference(now),
         constraints: Constraints(networkType: NetworkType.notRequired),
-        inputData: {'hour': scheduledHour, 'minute': scheduledMinute},
+        inputData: {
+          'hour': inputData?['hour'] ?? 12,
+          'minute': inputData?['minute'] ?? 0,
+          'scheduled_time': nextTime.toString(),
+        },
         tag: 'daily_medication',
       );
     }
-
     return Future.value(true);
   });
 }
@@ -316,17 +316,24 @@ class _TreatmentPageState extends State<TreatmentPage> {
 
   Future<void> _scheduleExactDailyReminder(int hour, int minute) async {
     try {
-      // Cancel any existing alarms first
       await AndroidAlarmManager.cancel(0);
       await Workmanager().cancelByTag('daily_medication');
 
+      // Get current time in local timezone
       final now = DateTime.now().toLocal();
-      var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
+
+      // Create scheduled time in local timezone
+      var scheduledTime =
+          DateTime(now.year, now.month, now.day, hour, minute).toLocal();
+
       if (scheduledTime.isBefore(now)) {
         scheduledTime = scheduledTime.add(const Duration(days: 1));
       }
 
-      // Schedule exact alarm
+      debugPrint(
+        '⏰ Scheduling exact reminder for: $scheduledTime (Local time)',
+      );
+
       await AndroidAlarmManager.oneShotAt(
         scheduledTime,
         0,
@@ -335,14 +342,8 @@ class _TreatmentPageState extends State<TreatmentPage> {
         wakeup: true,
         rescheduleOnReboot: true,
       );
-
-      debugPrint('⏰ Exact daily reminder scheduled for $scheduledTime');
-
-      // Also schedule WorkManager as backup (but only once)
-      await _scheduleWorkManagerBackup(hour, minute);
     } catch (e) {
       debugPrint('❌ Error scheduling exact reminder: $e');
-      // Fallback to WorkManager only
       await _scheduleWorkManagerBackup(hour, minute);
     }
   }
@@ -352,22 +353,31 @@ class _TreatmentPageState extends State<TreatmentPage> {
       await Workmanager().cancelByTag('daily_medication');
 
       final now = DateTime.now().toLocal();
-      var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute);
+      var scheduledTime =
+          DateTime(now.year, now.month, now.day, hour, minute).toLocal();
+
       if (scheduledTime.isBefore(now)) {
         scheduledTime = scheduledTime.add(const Duration(days: 1));
       }
 
       final initialDelay = scheduledTime.difference(now);
 
+      debugPrint(
+        '📆 Scheduling WorkManager backup for: $scheduledTime (Local time)',
+      );
+
       await Workmanager().registerOneOffTask(
         'daily_medication_${scheduledTime.millisecondsSinceEpoch}',
         'daily_medication',
         initialDelay: initialDelay,
         constraints: Constraints(networkType: NetworkType.notRequired),
+        inputData: {
+          'hour': hour,
+          'minute': minute,
+          'scheduled_time': scheduledTime.toString(),
+        },
         tag: 'daily_medication',
       );
-
-      debugPrint('📆 WorkManager backup scheduled for $scheduledTime');
     } catch (e) {
       debugPrint('❌ Error scheduling WorkManager backup: $e');
     }
@@ -950,12 +960,19 @@ class _TreatmentPageState extends State<TreatmentPage> {
   void _toggleReminder(bool value, int hour, int minute) async {
     try {
       await _setNotificationStatus(value, hour, minute);
+
+      // Debug print to verify the time being set
+      debugPrint('Setting reminder for: $hour:$minute');
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Pengingat ${value ? 'diaktifkan' : 'dinonaktifkan'}"),
+          content: Text(
+            "Pengingat ${value ? 'diaktifkan' : 'dinonaktifkan'} untuk $hour:$minute",
+          ),
         ),
       );
     } catch (e) {
+      debugPrint('Error toggling reminder: $e');
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("Gagal mengubah pengingat")));

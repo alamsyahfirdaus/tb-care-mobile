@@ -1,3 +1,3 @@
 class Connection {
-  static const BASE_URL = "https://edc5ae7c2c8b.ngrok-free.app/api";
+  static const BASE_URL = "https://a35391a14a6f.ngrok-free.app/api";
 }

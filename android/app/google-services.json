@@ -1,13 +1,14 @@
 {
   "project_info": {
-    "project_number": "154654283575",
-    "project_id": "apk-tb-care",
-    "storage_bucket": "apk-tb-care.firebasestorage.app"
+    "project_number": "451937709021",
+    "firebase_url": "https://tb-care-id-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "tb-care-id",
+    "storage_bucket": "tb-care-id.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:154654283575:android:9819f9d210796dac9dacb2",
+        "mobilesdk_app_id": "1:451937709021:android:52b7336f4418a465032434",
         "android_client_info": {
           "package_name": "com.example.apk_tb_care"
         }
@@ -15,7 +16,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBJ5gFETRkdEL9Ghc2EDuDpvQJIrwGmSY0"
+          "current_key": "AIzaSyDt8W9pFY-bomy9fMqJXqHhND0e9l2M4o0"
         }
       ],
       "services": {
